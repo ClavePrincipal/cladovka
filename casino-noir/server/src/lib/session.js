@@ -21,8 +21,10 @@ export function makeSessions({ pool, cfg }) {
   async function load(req, kind) {
     const token = req.cookies?.[name(kind)];
     if (!token || token.length > 100) return null;
+    // Staff sessions also expire after STAFF_IDLE_MIN minutes without activity (unattended back-office screens).
     const r = await pool.query(`UPDATE sessions SET last_seen = now() WHERE token_hash = $1 AND revoked_at IS NULL AND expires_at > now()
-      RETURNING id, csrf_token, user_id, staff_id`, [sha256(token)]);
+      AND (staff_id IS NULL OR last_seen > now() - make_interval(mins => $2))
+      RETURNING id, csrf_token, user_id, staff_id`, [sha256(token), cfg.STAFF_IDLE_MIN]);
     const s = r.rows[0];
     if (!s || (kind === 'staff') !== !!s.staff_id) return null;
     return s;

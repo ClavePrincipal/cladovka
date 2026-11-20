@@ -2,7 +2,7 @@ import { loadConfig } from './config.js';
 import { createPool, tx } from './lib/db.js';
 import { buildApp } from './app.js';
 import { migrate } from './scripts/migrate.js';
-import { expireDue } from './lib/bonus.js';
+import { expireDue, payCashback } from './lib/bonus.js';
 
 const cfg = loadConfig();
 const pool = createPool(cfg);
@@ -23,7 +23,12 @@ function job(name, lockId, everyMs, fn) {
 }
 job('crash-sweeper', 7001, 3000, () => app.ctx.svc.casino.sweepCrash());
 job('bonus-expiry', 7002, 5 * 60_000, () => tx(pool, expireDue));
-job('session-cleanup', 7003, 60 * 60_000, () => pool.query(`DELETE FROM sessions WHERE expires_at < now() - interval '30 days'`));
+job('session-cleanup', 7003, 60 * 60_000, async () => {
+  await pool.query(`DELETE FROM sessions WHERE expires_at < now() - interval '30 days'`);
+  await pool.query(`DELETE FROM login_failures WHERE at < now() - interval '1 day'`);
+});
+job('expire-pending-deposits', 7004, 5 * 60_000, () => app.ctx.svc.payments.expirePending());
+job('weekly-cashback', 7005, 60 * 60_000, () => tx(pool, c => payCashback(c, cfg))); // idempotent per user+week
 
 const shutdown = async sig => { app.log.info(`${sig}: shutting down`); await app.close(); await pool.end(); process.exit(0); };
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

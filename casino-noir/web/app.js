@@ -13,6 +13,7 @@ const store = {
 };
 const CUR = { KZT: '₸', RUB: '₽', USD: '$', UZS: 'сум' };
 const S = {
+  accept: store.get('accept', 'higher'),
   mode: 'demo', cfg: null, csrf: null, balance: 0, bonusBalance: 0, pendingWd: 0, bonus: null, user: null, limits: {},
   slip: [], slipMode: 'single', slipTab: 'coupon', stake: 1000, sport: 'all', line: 'all', cfilter: 'all', q: '', events: [], prevOdds: {},
 };
@@ -78,11 +79,14 @@ const OUT = ['П1', 'X', 'П2'];
 
 /* ================= API backend ================= */
 async function api(method, url, body) {
-  const res = await fetch(url, {
-    method, credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', 'x-requested-with': 'noir', ...(S.csrf ? { 'x-csrf-token': S.csrf } : {}) },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(url, {
+      method, credentials: 'same-origin',
+      headers: { 'content-type': 'application/json', 'x-requested-with': 'noir', ...(S.csrf ? { 'x-csrf-token': S.csrf } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  } catch (e) { const err = new Error('Нет соединения с сервером. Проверьте интернет и повторите.'); err.code = 'NETWORK'; throw err; }
   let data = null; try { data = await res.json(); } catch (e) {}
   if (!res.ok) { const err = new Error(data?.message || 'Ошибка сервера (' + res.status + ')'); err.code = data?.error; err.data = data; throw err; }
   return data;
@@ -101,7 +105,7 @@ const ApiBackend = {
   async refresh() { this.applyProfile(await api('GET', '/api/me')); renderAcct(); },
   methods: () => S.cfg.methods.map(m => ({ ...m, min: fromM(m.min), max: fromM(m.max) })),
   async register(f) { const r = await api('POST', '/api/auth/register', f); this.applyProfile(r); return r.credentials; },
-  async login(login, password) { this.applyProfile(await api('POST', '/api/auth/login', { login, password })); },
+  async login(login, password, totp, captcha) { this.applyProfile(await api('POST', '/api/auth/login', { login, password, totp: totp || undefined, captcha: captcha || undefined })); },
   async logout() { await api('POST', '/api/auth/logout', {}); S.csrf = null; this.applyProfile(null); },
   async slot(bet) { const r = await api('POST', '/api/games/slot', { bet: toM(bet) }); S.balance = fromM(r.balance); return { ...r.result, payout: fromM(r.payout), nonce: r.nonce }; },
   async roulette(bets) {
@@ -115,10 +119,10 @@ const ApiBackend = {
   async minesCashout() { const r = await api('POST', '/api/games/mines/cashout', {}); S.balance = fromM(r.balance); return { ...r, payout: fromM(r.payout) }; },
   async crashStart(bet, auto) { const r = await api('POST', '/api/games/crash/start', { bet: toM(bet), auto }); S.balance = fromM(r.balance); return r; },
   async crashCashout() { const r = await api('POST', '/api/games/crash/cashout', {}); if (r.balance != null) S.balance = fromM(r.balance); return { ...r, payout: fromM(r.payout || 0) }; },
-  async crashStatus() { const r = await api('GET', '/api/games/crash'); if (r.balance != null) S.balance = fromM(r.balance); return { ...r, payout: fromM(r.payout || 0) }; },
+  async crashStatus() { const r = await api('GET', '/api/games/crash'); if (r.balance != null) S.balance = fromM(r.balance); return { ...r, payout: fromM(r.payout || 0), bet: r.bet != null ? fromM(r.bet) : undefined }; },
   async events() { return (await api('GET', '/api/sport/events')).map(e => ({ ...e, live: e.status === 'live' })); },
-  async placeBet({ kind, stake, selections }) {
-    const r = await api('POST', '/api/sport/bets', { kind, stake: toM(stake), selections: selections.map(s => ({ eventId: s.ev, outcome: s.out, odds: s.odds })) });
+  async placeBet({ kind, stake, selections, acceptChanges }) {
+    const r = await api('POST', '/api/sport/bets', { kind, stake: toM(stake), acceptChanges, selections: selections.map(s => ({ eventId: s.ev, outcome: s.out, odds: s.odds })) });
     S.balance = fromM(r.balance); return r;
   },
   async myBets() { return (await api('GET', '/api/sport/bets')).map(b => ({ ...b, stake: fromM(b.stake), payout: fromM(b.payout), at: b.createdAt, sels: b.selections.map(s => ({ ...s, pick: OUT[s.outcome] })) })); },
@@ -127,7 +131,17 @@ const ApiBackend = {
     location.href = r.redirectUrl; // hosted checkout of the payment provider
     return { redirected: true };
   },
-  async withdraw({ method, provider, amount }) { const r = await api('POST', '/api/wallet/withdraw', { provider, method, amount: toM(amount) }); S.balance = fromM(r.balance); return r; },
+  async withdraw({ method, provider, instrument, amount, forfeitBonus }) {
+    const r = await api('POST', '/api/wallet/withdraw', { provider, method, instrument, amount: toM(amount), forfeitBonus: forfeitBonus || undefined });
+    S.balance = fromM(r.balance); return r;
+  },
+  instruments: () => api('GET', '/api/wallet/instruments'),
+  twofaSetup: () => api('POST', '/api/me/2fa/setup', {}),
+  async twofaEnable(code) { this.applyProfile(await api('POST', '/api/me/2fa/enable', { code })); },
+  async twofaDisable(password, code) { this.applyProfile(await api('POST', '/api/me/2fa/disable', { password, code })); },
+  sessions: () => api('GET', '/api/me/sessions'),
+  revokeOthers: () => api('POST', '/api/me/sessions/revoke-others', {}),
+  async changePassword(current, next) { this.applyProfile(await api('POST', '/api/me/password', { current, next })); },
   async cancelWithdrawal(id) { const r = await api('POST', `/api/wallet/withdraw/${id}/cancel`, {}); S.balance = fromM(r.balance); },
   async history() {
     const r = await api('GET', '/api/wallet/history');
@@ -143,7 +157,7 @@ const ApiBackend = {
   async setLimits(l) { const r = await api('POST', '/api/me/limits', l); this.applyProfile(r); return r; },
   async fair() { return api('GET', '/api/fair'); },
   async rotate(clientSeed) { return api('POST', '/api/fair/rotate', clientSeed ? { clientSeed } : {}); },
-  async kycStart() { const r = await api('POST', '/api/kyc/start', {}); await this.refresh(); return r; },
+  async kycStart() { return api('POST', '/api/kyc/start', {}); },
 };
 
 /* ================= Demo backend (browser only, virtual money) ================= */
@@ -272,7 +286,7 @@ const DemoBackend = {
     let at = null;
     if (c.auto && c.auto < c.point && current >= c.auto) at = c.auto;
     else if (manual && !crashed) { if (current < 1.01) demoErr('TOO_EARLY', 'Раунд ещё не начался'); at = current; }
-    else if (!crashed) return { open: true, elapsed: el };
+    else if (!crashed) return { open: true, elapsed: el, bet: c.bet, auto: c.auto };
     D.crash = null; const p = at ? pay(c.bet, at) : 0; if (p) demoAdd(p);
     return { open: false, point: c.point, cashedAt: at, payout: p };
   },
@@ -308,17 +322,26 @@ const DemoBackend = {
     const m = DEMO_METHODS.find(x => x.id === method);
     if (D.limits.depositDaily) { const d = new Date().toDateString(); const today = D.tx.filter(t => t.t === 'dep' && new Date(t.at).toDateString() === d).reduce((a, t) => a + t.a, 0); if (today + amount > D.limits.depositDaily) demoErr('DEPOSIT_LIMIT', 'Превышен ваш дневной лимит депозита'); }
     await sleep(1200); const first = !D.tx.some(t => t.t === 'dep');
-    demoAdd(amount); D.tx.push({ t: 'dep', n: 'Пополнение · ' + m.name, a: amount, at: Date.now() });
+    demoAdd(amount); D.tx.push({ t: 'dep', n: 'Пополнение · ' + m.name, a: amount, at: Date.now(), method, instrument: method + ':••4242' });
     if (withBonus && first) { const bn = Math.min(amount, 300000); D.bonus += bn; S.bonusBalance = D.bonus; D.tx.push({ n: 'Бонус 100% (вейджер ×30)', a: bn, at: Date.now(), st: 'Бонусный счёт' }); toast(`Начислен бонус ${fmt(bn)} на бонусный счёт`, 'ok'); }
     D.save(); toast(`Счёт пополнен на ${fmt(amount)}`, 'ok'); return {};
   },
-  async withdraw({ method, amount }) {
+  async instruments() {
+    const seen = new Map(); D.tx.filter(t => t.t === 'dep' && t.instrument).forEach(t => seen.set(t.instrument, { provider: 'demo', method: t.method, instrument: t.instrument }));
+    return [...seen.values()];
+  },
+  async twofaSetup() { demoErr('DEMO', 'Двухфакторная защита доступна в полной версии с сервером'); },
+  async sessions() { return [{ id: 1, ip: '—', user_agent: navigator.userAgent, created_at: new Date(), last_seen: new Date(), current: true }]; },
+  async revokeOthers() { return { revoked: 0 }; },
+  async changePassword() { demoErr('DEMO', 'Смена пароля доступна в полной версии с сервером'); },
+  async withdraw({ method, amount, instrument }) {
     if (!D.user) demoErr('AUTH', 'Для вывода зарегистрируйтесь');
+    if (!(await this.instruments()).some(i => i.instrument === instrument)) demoErr('INSTRUMENT', 'Вывод возможен только на карту, с которой вы пополняли счёт');
     if (amount > D.balance) demoErr('INSUFFICIENT_FUNDS', 'Сумма больше доступного баланса');
     await sleep(800); const m = DEMO_METHODS.find(x => x.id === method); demoAdd(-amount);
     const t = { n: 'Вывод · ' + m.name, a: -amount, at: Date.now(), st: 'На проверке' }; D.tx.push(t); D.save();
     setTimeout(() => { t.st = 'Выплачен'; D.save(); toast(`Вывод ${fmt(amount)} выплачен`, 'ok'); }, 4000);
-    return {};
+    return { status: 'review' };
   },
   async history() { return { ledger: [], payments: D.tx.slice().reverse().slice(0, 50).map(t => ({ ...t, st: t.st || 'Проведено' })) }; },
   async setLimits(l) {
@@ -414,14 +437,17 @@ async function renderSlip() {
     ${c.odds ? `<div class="kv"><span>Общий коэффициент</span><b>${c.odds.toFixed(2)}</b></div>` : ''}
     <div class="kv"><span>Сумма ставки</span><b>${fmt(c.total)}</b></div>
     <div class="kv big"><span>Возможный выигрыш</span><b>${fmt(c.win)}</b></div>
+    <div class="field"><label for="accept">Если коэффициент изменится</label><select class="inp" id="accept" style="font-family:var(--font-ui)">
+      ${[['higher', 'Принимать только повышение'], ['none', 'Спрашивать при любом изменении'], ['any', 'Принимать любые изменения']].map(([k, t]) => `<option value="${k}" ${S.accept === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
     <button class="btn gold big block" type="button" id="place">Сделать ставку</button>
     <button class="btn ghost block" type="button" id="clear-slip">Очистить купон</button>`;
 }
 async function placeBet() {
   if (B.mode === 'api' && !S.user) { openAuth('register'); return; }
   const c = slipCalc(), btn = $('#place'); btn.disabled = true;
+  if (S.slip.some(s => s.live)) btn.textContent = 'Принимаем live-ставку…';
   try {
-    await B.placeBet({ kind: S.slipMode === 'express' && S.slip.length >= 2 ? 'express' : 'single', stake: S.stake, selections: S.slip });
+    await B.placeBet({ kind: S.slipMode === 'express' && S.slip.length >= 2 ? 'express' : 'single', stake: S.stake, selections: S.slip, acceptChanges: S.accept });
     toast(`Ставка принята: ${fmt(c.total)}`, 'ok');
     S.slip = []; S.slipMode = 'single'; S.slipTab = 'mine'; renderAcct(); renderSport(); renderSlip();
   } catch (e) {
@@ -429,7 +455,7 @@ async function placeBet() {
       for (const ch of e.data.changed) { const s = S.slip.find(x => x.ev === ch.eventId); if (s) s.odds = ch.odds; }
       toast('Коэффициенты изменились. Проверьте купон и подтвердите ставку ещё раз.', 'err'); renderSlip();
     } else { toast(e.message, 'err'); if (e.code === 'INSUFFICIENT_FUNDS') openWallet('deposit'); if (e.code === 'AUTH') openAuth('login'); }
-    if ($('#place')) $('#place').disabled = false;
+    if ($('#place')) { $('#place').disabled = false; $('#place').textContent = 'Сделать ставку'; }
   }
 }
 
@@ -477,6 +503,7 @@ function closeModal() { if (cleanup) { cleanup(); cleanup = null; } $('#modal').
 $('#modal').addEventListener('click', e => { if (e.target.id === 'modal' || e.target.closest('.close')) closeModal(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#modal').hidden) closeModal(); });
 const head = (title, meta = '') => `<div class="d-head"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><h3>${title}</h3>${meta ? `<div class="meta">${meta}</div>` : ''}</div><button class="close" type="button" aria-label="Закрыть">×</button></div>`;
+const maxWin = () => (S.cfg?.maxPayout ?? 100_000_000_00) / 100;
 const fairFoot = () => `<div class="d-foot"><span id="fair-foot" class="num"></span><button type="button" data-act="fair">Как проверить исход</button></div>`;
 async function updateFairFoot() { const f = $('#fair-foot'); if (!f || !S.user && B.mode === 'api') return; const r = await quiet(B.fair()); if (r && $('#fair-foot')) $('#fair-foot').textContent = `Хэш сида: ${r.current.serverHash.slice(0, 16)}… · клиентский сид: ${r.current.clientSeed} · nonce: ${r.current.nonce}`; }
 function stepper(id, val) { return `<div class="stepper"><button type="button" data-step="${id}" data-k="0.5" aria-label="Уменьшить ставку">−</button><input id="${id}" type="number" min="100" step="10" value="${val}" inputmode="decimal"><button type="button" data-step="${id}" data-k="2" aria-label="Увеличить ставку">+</button></div>`; }
@@ -490,7 +517,7 @@ function openGame(id) {
   const g = GAMES.find(x => x.id === id); if (!g) return;
   if (g.e === 'live') { openModal(head(esc(g.n), `<span>${esc(g.pr)}</span><span>RTP <b>${rtpTxt(g.rtp)}</b></span>`) + `<div class="d-body"><div class="empty"><b>Live-столы подключаются через провайдера</b>Здесь откроется видеопоток с дилером от лицензированной студии (Evolution, Pragmatic Live, Ezugi) после подписания договора с ней.</div><button class="btn gold block" type="button" data-game="roulette">Открыть Европейскую рулетку</button></div>`); return; }
   if (needLogin()) return;
-  const meta = `<span>${esc(g.pr)}</span><span>RTP <b>${rtpTxt(g.rtp)}</b></span><span>Баланс <b class="num" data-live-bal style="color:var(--gold-hi)">${fmt(S.balance)}</b></span>`;
+  const meta = `<span>${esc(g.pr)}</span><span>RTP <b>${rtpTxt(g.rtp)}</b></span><span>Макс. выигрыш за раунд ${fmt(maxWin())}</span><span>Баланс <b class="num" data-live-bal style="color:var(--gold-hi)">${fmt(S.balance)}</b></span>`;
   openModal(head(esc(g.n), meta) + `<div class="d-body" id="gbody"></div>` + fairFoot(), true);
   updateFairFoot();
   ({ slot: mountSlot, roulette: mountRoulette, crash: mountCrash, dice: mountDice, mines: mountMines })[g.e]($('#gbody'), g);
@@ -628,6 +655,17 @@ function mountCrash(el) {
     poll = setInterval(async () => { const s = await quiet(B.crashStatus()); if (s && !s.open && s.point) finish(s); }, 400);
   };
   draw(0, false);
+  // Re-opened mid-round: continue the running round (the server keeps the clock), or show how it ended.
+  quiet(B.crashStatus()).then(s => {
+    if (!s || state !== 'idle') return;
+    if (s.open) {
+      bet = s.bet; cashed = false; state = 'running'; t0 = performance.now() - s.elapsed;
+      $('#cbet').value = s.bet; if (s.auto) $('#cauto').value = s.auto; $('#cbet').disabled = true; $('#cauto').disabled = true;
+      raf = requestAnimationFrame(frame);
+      poll = setInterval(async () => { const st = await quiet(B.crashStatus()); if (st && !st.open && st.point) finish(st); }, 400);
+      toast('Продолжаем ваш раунд');
+    } else if (s.point) { state = 'running'; finish(s); }
+  });
 }
 
 /* ---------- dice ---------- */
@@ -695,7 +733,8 @@ function mountMines(el) {
 }
 
 /* ================= wallet ================= */
-let wTab = 'deposit', wMethod = 'card';
+let wTab = 'deposit', wMethod = 'card', wInst = 0, wInstList = [];
+const methodName = i => (B.methods().find(m => m.id === i.method && m.provider === i.provider)?.name || i.method);
 function openWallet(tab = 'deposit') { if (needLogin()) return; wTab = tab; renderWallet(); }
 async function renderWallet() {
   const methods = B.methods(); let body = '';
@@ -706,27 +745,57 @@ async function renderWallet() {
     const pays = h.payments.map(t => `<div class="tx"><span>${esc(t.n)}</span><span class="amt ${t.a > 0 ? 'plus' : 'minus'}">${t.a > 0 ? '+' : ''}${fmtM(t.a)}</span><small>${new Date(t.at).toLocaleString('ru-RU')}</small><small style="text-align:right">${esc(t.st)}${t.canCancel ? ` · <button type="button" data-wcancel="${t.id}" style="color:var(--gold);font-weight:700;font-size:11px">Отменить</button>` : ''}</small></div>`).join('');
     const led = h.ledger.slice(0, 60).map(t => `<div class="tx"><span>${esc(t.n)}</span><span class="amt ${t.a > 0 ? 'plus' : 'minus'}">${t.a > 0 ? '+' : ''}${fmtM(t.a)}</span><small>${new Date(t.at).toLocaleString('ru-RU')}</small><small></small></div>`).join('');
     body = (pays ? `<h4 class="eyebrow" style="margin:0">Платежи</h4>${pays}` : '') + (led ? `<h4 class="eyebrow" style="margin:8px 0 0">Все операции по счёту</h4>${led}` : '') || `<div class="empty"><b>Операций пока нет</b>Здесь будут пополнения, выводы и ставки.</div>`;
+  } else if (wTab === 'withdraw') {
+    wInstList = (await quiet(B.instruments())) || [];
+    const u = S.user || {};
+    const kycBlock = B.mode === 'api' && u.kycStatus !== 'verified' ? `<div class="note"><b>Нужна верификация личности.</b> Статус: ${{ none: 'не начата', pending: 'на проверке', rejected: 'отклонена' }[u.kycStatus] || '—'}. <button type="button" data-act="kyc" style="color:var(--gold);font-weight:700">Пройти проверку</button></div>` : '';
+    const hold = u.securityHoldUntil && new Date(u.securityHoldUntil) > new Date() ? `<div class="note"><b>Вывод доступен с ${new Date(u.securityHoldUntil).toLocaleString('ru-RU')}.</b> После смены пароля или 2FA мы делаем паузу 24 часа: так никто не сможет вывести деньги, если получил доступ к аккаунту.</div>` : '';
+    if (!wInstList.length) body = `${kycBlock}<div class="empty"><b>Сначала пополните счёт</b>Вывести деньги можно только на карту или кошелёк, с которого вы пополняли счёт. Это защищает ваши деньги, если кто-то получит доступ к аккаунту.</div>`;
+    else {
+      if (wInst >= wInstList.length) wInst = 0;
+      const sel = wInstList[wInst], m = methods.find(x => x.id === sel.method && x.provider === sel.provider) || methods[0];
+      const autoUpTo = S.cfg?.withdrawals?.autoApproveUpTo;
+      body = `${kycBlock}${hold}<div class="mgroup">Куда вывести</div><div class="methods">${wInstList.map((i, k) => `<button type="button" class="method ${k === wInst ? 'on' : ''}" data-inst="${k}"><b>${esc(methodName(i))}</b><small class="num">${esc(i.instrument.split(':').slice(1).join(':') || i.instrument)}</small></button>`).join('')}</div>
+      <div class="field"><label for="wamt">Сумма, ${cur()} · от ${m.min.toLocaleString('ru-RU')} до ${m.max.toLocaleString('ru-RU')}</label><input class="inp" id="wamt" type="number" min="${m.min}" value="${Math.max(0, Math.min(10000, Math.floor(S.balance)))}" inputmode="decimal"></div>
+      <div class="quick">${[5000, 10000, 25000, 'Всё'].map(v => `<button type="button" data-wq="${v}">${typeof v === 'number' ? v.toLocaleString('ru-RU') : v}</button>`).join('')}</div>
+      ${S.bonus || S.bonusBalance ? `<div class="note"><b>У вас есть неотыгранный бонус.</b> При выводе он будет аннулирован. Ваши собственные деньги не пострадают.</div>` : ''}
+      <div class="note">Перед выводом нужно сделать ставки на сумму пополнений.${autoUpTo ? ` Выплаты до ${fmt(autoUpTo / 100)} верифицированным игрокам отправляются автоматически, крупные проверяет финансовый отдел.` : ''}</div>
+      <div id="wconfirm"></div>
+      <button class="btn gold big block" type="button" id="wgo">Вывести</button>`;
+    }
   } else {
     let groups = '', last = ''; methods.forEach(x => { if (x.group !== last) { groups += `<div class="mgroup">${esc(x.group)}</div>`; last = x.group; } groups += `<button type="button" class="method ${x.id === wMethod ? 'on' : ''}" data-method="${x.id}"><b>${esc(x.name)}</b><small>${esc(x.eta)}</small></button>`; });
-    const dep = wTab === 'deposit', firstDep = B.mode === 'api' ? !S.bonus && !S.bonusBalance : !D.tx.some(t => t.t === 'dep');
-    const kycBlock = !dep && B.mode === 'api' && S.user?.kycStatus !== 'verified' ? `<div class="note"><b>Нужна верификация.</b> Статус: ${{ none: 'не начата', pending: 'на проверке', rejected: 'отклонена' }[S.user?.kycStatus] || '—'}. <button type="button" data-act="kyc" style="color:var(--gold);font-weight:700">Пройти проверку</button></div>` : '';
+    const firstDep = B.mode === 'api' ? !S.bonus && !S.bonusBalance && S.user?.bonusPref !== 'none' : !D.tx.some(t => t.t === 'dep');
     body = `<div class="methods">${groups}</div>
-    <div class="field"><label for="wamt">Сумма, ${cur()} · от ${m.min.toLocaleString('ru-RU')} до ${m.max.toLocaleString('ru-RU')}</label><input class="inp" id="wamt" type="number" min="${m.min}" value="${dep ? Math.max(10000, m.min) : Math.max(0, Math.min(10000, Math.floor(S.balance)))}" inputmode="decimal"></div>
-    <div class="quick">${(dep ? [5000, 10000, 25000, 50000] : [5000, 10000, 25000, 'Всё']).map(v => `<button type="button" data-wq="${v}">${typeof v === 'number' ? v.toLocaleString('ru-RU') : v}</button>`).join('')}</div>
-    ${dep ? `<label class="check"><input type="checkbox" id="wbonus" ${firstDep ? 'checked' : 'disabled'}><span>Бонус 100% на первый депозит (до 300 000 ₸, вейджер ×30) ${firstDep ? '' : '(уже использован)'}</span></label>` : `${kycBlock}<div class="note">Вывод на тот же способ, которым вы пополняли счёт. Перед выводом нужно сделать ставки на сумму пополнений. Заявку проверяет финансовый отдел.</div>`}
-    <button class="btn gold big block" type="button" id="wgo">${dep ? 'Перейти к оплате' : 'Вывести'}</button>
+    <div class="field"><label for="wamt">Сумма, ${cur()} · от ${m.min.toLocaleString('ru-RU')} до ${m.max.toLocaleString('ru-RU')}</label><input class="inp" id="wamt" type="number" min="${m.min}" value="${Math.max(10000, m.min)}" inputmode="decimal"></div>
+    <div class="quick">${[5000, 10000, 25000, 50000].map(v => `<button type="button" data-wq="${v}">${v.toLocaleString('ru-RU')}</button>`).join('')}</div>
+    <label class="check"><input type="checkbox" id="wbonus" ${firstDep ? 'checked' : 'disabled'}><span>Бонус 100% на первый депозит (до 300 000 ₸, вейджер ×30) ${firstDep ? '' : '(недоступен)'}. <button type="button" data-act="rules" style="color:var(--gold);font-weight:700">Условия</button></span></label>
+    <button class="btn gold big block" type="button" id="wgo">Перейти к оплате</button>
     ${B.mode === 'demo' ? `<div class="note"><b>Демо:</b> деньги виртуальные. С сервером этот шаг ведёт на страницу платёжного провайдера.</div>` : S.cfg.sandbox ? `<div class="note"><b>Тестовый шлюз:</b> откроется страница песочницы, деньги не списываются.</div>` : ''}`;
   }
   const meta = `<span>Баланс <b class="num" style="color:var(--gold-hi)">${fmt(S.balance)}</b></span>${S.bonusBalance ? `<span>Бонус <b class="num">${fmt(S.bonusBalance)}</b></span>` : ''}${S.pendingWd ? `<span>На выводе <b class="num">${fmt(S.pendingWd)}</b></span>` : ''}`;
   openModal(head('Кошелёк', meta) + `<div class="d-body"><div class="tabs">${[['deposit', 'Пополнить'], ['withdraw', 'Вывести'], ['history', 'История']].map(([k, n]) => `<button type="button" data-wtab="${k}" class="${wTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>${body}</div>`, true);
 }
-async function walletGo() {
-  const m = B.methods().find(x => x.id === wMethod), a = +$('#wamt').value, dep = wTab === 'deposit';
+async function walletGo(forfeitBonus = false) {
+  const dep = wTab === 'deposit', inst = dep ? null : wInstList[wInst];
+  const m = dep ? B.methods().find(x => x.id === wMethod) : B.methods().find(x => x.id === inst.method && x.provider === inst.provider), a = +$('#wamt').value;
   if (!(a >= m.min && a <= m.max)) { toast(`Сумма для ${m.name}: от ${m.min.toLocaleString('ru-RU')} до ${m.max.toLocaleString('ru-RU')} ${cur()}`, 'err'); return; }
   const b = $('#wgo'); b.disabled = true; b.textContent = dep ? 'Открываем страницу оплаты…' : 'Создаём заявку…';
   try {
     if (dep) { const r = await run(() => B.deposit({ method: m.id, provider: m.provider, amount: a, withBonus: $('#wbonus')?.checked && !$('#wbonus').disabled })); if (r.redirected) return; }
-    else { await run(() => B.withdraw({ method: m.id, provider: m.provider, amount: a })); toast(`Заявка на вывод ${fmt(a)} создана`, 'ok'); }
+    else {
+      let r;
+      try { r = await B.withdraw({ method: inst.method, provider: inst.provider, instrument: inst.instrument, amount: a, forfeitBonus }); }
+      catch (e) {
+        if (e.code === 'BONUS_ACTIVE') {
+          const bn = e.data?.bonus; b.disabled = false; b.textContent = 'Вывести'; b.hidden = true;
+          $('#wconfirm').innerHTML = `<div class="note" style="border-color:var(--gold-lo)"><b>Бонус будет аннулирован.</b> Бонус ${bn ? fmt(bn.amount / 100) : ''} отыгран на ${bn ? Math.floor(bn.wagered / bn.wager_req * 100) : 0}%. Если вывести деньги сейчас, бонус сгорит. Ваши собственные деньги останутся на счёте.<div class="row-gap" style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn gold" type="button" id="wforfeit">Вывести и отказаться от бонуса</button><button class="btn ghost" type="button" id="wkeep">Продолжить отыгрыш</button></div></div>`;
+          return;
+        }
+        toast(e.message, 'err'); if (e.code === 'KYC_REQUIRED') { closeModal(); openAccount(); } throw e;
+      }
+      toast(r.status === 'approved' ? `Вывод ${fmt(a)} одобрен автоматически и отправлен` : `Заявка на вывод ${fmt(a)} создана и передана на проверку`, 'ok');
+    }
     await B.refresh(); renderWallet();
   } catch (e) { if ($('#wgo')) { b.disabled = false; b.textContent = dep ? 'Перейти к оплате' : 'Вывести'; } }
 }
@@ -737,27 +806,33 @@ function openAuth(tab) {
   if (tab === 'login') aTab = 'login'; else if (tab === 'register' && aTab === 'login') aTab = 'oneclick';
   const tabs = [['oneclick', 'В 1 клик'], ['phone', 'Телефон'], ['email', 'E-mail'], ['login', 'Вход']];
   let f;
+  const captchaBox = S.cfg?.turnstileSiteKey ? '<div id="captcha"></div>' : '';
   if (aTab === 'login') f = `<div class="field"><label for="alogin">ID, e-mail или телефон</label><input class="inp" id="alogin" autocomplete="username" style="font-family:var(--font-ui)"></div>
     <div class="field"><label for="apass">Пароль</label><input class="inp" id="apass" type="password" autocomplete="current-password"></div>
-    <button class="btn gold big block" type="button" id="alog">Войти</button>`;
+    <div class="field" id="atotp-wrap" hidden><label for="atotp">Код из приложения 2FA</label><input class="inp" id="atotp" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></div>
+    ${captchaBox}
+    <button class="btn gold big block" type="button" id="alog">Войти</button>
+    <p class="muted" style="margin:0;font-size:12px">Забыли пароль? Напишите в поддержку: восстановление по SMS и e-mail появится после подключения провайдера рассылок.</p>`;
   else {
-    const cs = Object.keys(CUR).map(c => `<option value="${c}">${c} · ${CUR[c]}</option>`).join('');
     const extra = { oneclick: `<div class="note">Мы создадим аккаунт с ID и паролем. Телефон и e-mail можно добавить позже.</div>`,
       phone: `<div class="field"><label for="aphone">Номер телефона</label><input class="inp" id="aphone" type="tel" placeholder="+7 700 000 00 00" inputmode="tel" autocomplete="tel"></div><div class="field"><label for="apass">Пароль</label><input class="inp" id="apass" type="password" placeholder="Не меньше 10 символов" autocomplete="new-password"></div>`,
       email: `<div class="field"><label for="aemail">E-mail</label><input class="inp" id="aemail" type="email" placeholder="name@example.com" autocomplete="email" style="font-family:var(--font-ui)"></div><div class="field"><label for="apass">Пароль</label><input class="inp" id="apass" type="password" placeholder="Не меньше 10 символов" autocomplete="new-password"></div>` }[aTab];
     f = `${extra}
     <div class="field"><label for="abirth">Дата рождения</label><input class="inp" id="abirth" type="date" max="${new Date(Date.now() - 18 * 365.25 * 864e5).toISOString().slice(0, 10)}"></div>
-    <div class="field"><label for="acur">Валюта счёта</label><select class="inp" id="acur">${cs}</select></div>
+    <div class="kv"><span>Валюта счёта</span><b>${esc(S.cfg?.currency || 'KZT')} · ${CUR[S.cfg?.currency || 'KZT']}</b></div>
     <div class="field"><label for="abonus">Приветственный бонус</label><select class="inp" id="abonus"><option value="casino">Казино: 100% до 300 000 ₸</option><option value="sport">Спорт: 100% до 300 000 ₸</option><option value="none">Без бонуса</option></select></div>
-    <label class="check"><input type="checkbox" id="a18"><span>Мне исполнилось 18 лет, я принимаю правила и политику ответственной игры.</span></label>
+    <label class="check"><input type="checkbox" id="a18"><span>Мне исполнилось 18 лет, у меня нет другого аккаунта в NOIR, я принимаю <button type="button" data-act="rules" style="color:var(--gold);font-weight:700">правила</button> и политику ответственной игры.</span></label>
+    ${captchaBox}
     <button class="btn gold big block" type="button" id="ago">Зарегистрироваться</button>`;
   }
   openModal(head(aTab === 'login' ? 'Вход' : 'Регистрация') + `<div class="d-body"><div class="tabs">${tabs.map(([k, n]) => `<button type="button" data-atab="${k}" class="${aTab === k ? 'on' : ''}">${n}</button>`).join('')}</div>${f}</div>`);
+  if (S.cfg?.turnstileSiteKey && window.turnstile && $('#captcha')) window.turnstile.render('#captcha', { sitekey: S.cfg.turnstileSiteKey, theme: 'dark' });
 }
+const captchaToken = () => $('#captcha [name="cf-turnstile-response"]')?.value || undefined;
 async function doRegister() {
   if (!$('#a18').checked) { toast('Подтвердите, что вам есть 18 лет', 'err'); return; }
   const birthDate = $('#abirth').value; if (!birthDate) { toast('Укажите дату рождения', 'err'); return; }
-  const f = { method: aTab, birthDate, currency: $('#acur').value, bonusPref: $('#abonus').value, acceptTerms: true };
+  const f = { method: aTab, birthDate, bonusPref: $('#abonus').value, acceptTerms: true, captcha: captchaToken() };
   if (aTab === 'phone') { f.phone = $('#aphone').value; f.password = $('#apass').value; }
   if (aTab === 'email') { f.email = $('#aemail').value.trim(); f.password = $('#apass').value; }
   if (f.password !== undefined && f.password.length < 10) { toast('Пароль должен быть не короче 10 символов', 'err'); return; }
@@ -770,8 +845,11 @@ async function doRegister() {
 }
 async function doLogin() {
   $('#alog').disabled = true;
-  try { await run(() => B.login($('#alogin').value.trim(), $('#apass').value)); closeModal(); renderAcct(); applyReality(); toast('С возвращением!', 'ok'); }
-  catch (e) { if ($('#alog')) $('#alog').disabled = false; }
+  try { await run(() => B.login($('#alogin').value.trim(), $('#apass').value, $('#atotp')?.value.trim(), captchaToken())); closeModal(); renderAcct(); applyReality(); toast('С возвращением!', 'ok'); }
+  catch (e) {
+    if (e.code === 'TOTP_REQUIRED' && $('#atotp-wrap')) { $('#atotp-wrap').hidden = false; $('#atotp').focus(); }
+    if ($('#alog')) $('#alog').disabled = false;
+  }
 }
 function openAccount() {
   if (!S.user) { openAuth('register'); return; }
@@ -781,20 +859,31 @@ function openAccount() {
   const excl = L.selfExcludedUntil && new Date(L.selfExcludedUntil) > new Date() ? `<div class="note"><b>Самоисключение активно</b> до ${new Date(L.selfExcludedUntil).toLocaleString('ru-RU')}. Ставки и пополнения недоступны, вывод доступен.</div>` : '';
   openModal(head(esc(u.name), `<span>ID <b class="num" style="color:var(--fg)">${esc(u.id)}</b></span><span>Валюта ${esc(u.currency)}</span><span>Верификация: ${kyc}</span>`) + `<div class="d-body">
     <div class="trio"><div><small>Баланс</small><b>${fmt(S.balance)}</b></div><div><small>Бонус</small><b>${fmt(S.bonusBalance || 0)}</b></div><div><small>На выводе</small><b>${fmt(S.pendingWd || 0)}</b></div></div>
-    ${S.bonus ? `<div class="note"><b>Отыгрыш бонуса:</b> ${fmt(S.bonus.wagered / 100)} из ${fmt(S.bonus.wager_req / 100)} до ${new Date(S.bonus.expires_at).toLocaleDateString('ru-RU')}</div>` : ''}
+    ${S.bonus ? `<div class="note"><b>Отыгрыш бонуса (${S.bonus.product === 'sport' ? 'спорт' : 'казино'}):</b> ${fmt(S.bonus.wagered / 100)} из ${fmt(S.bonus.wager_req / 100)} до ${new Date(S.bonus.expires_at).toLocaleDateString('ru-RU')}. <button type="button" data-act="rules" style="color:var(--gold);font-weight:700">Что засчитывается</button></div>` : ''}
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn gold" type="button" data-act="deposit">Пополнить</button><button class="btn ghost" type="button" data-act="withdraw">Вывести</button><button class="btn ghost" type="button" data-act="history">История</button>${u.kycStatus !== 'verified' ? `<button class="btn ghost" type="button" data-act="kyc">Пройти верификацию</button>` : ''}</div>
+    <h3 style="font:500 20px var(--font-display)">Безопасность</h3>
+    ${u.securityHoldUntil && new Date(u.securityHoldUntil) > new Date() ? `<div class="note">Вывод временно недоступен до ${new Date(u.securityHoldUntil).toLocaleString('ru-RU')}: защитная пауза после смены пароля или 2FA.</div>` : ''}
+    <div class="kv"><span>Вход по коду из приложения (2FA)</span><b style="font-family:var(--font-ui)">${u.totpEnabled ? 'включён' : 'выключен'}</b></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">${u.totpEnabled ? '<button class="btn ghost" type="button" id="tfa-off">Отключить 2FA</button>' : '<button class="btn gold" type="button" id="tfa-on">Включить 2FA</button>'}<button class="btn ghost" type="button" id="sess">Активные сеансы</button><button class="btn ghost" type="button" id="pwd">Сменить пароль</button></div>
+    <div id="secbox"></div>
     <h3 style="font:500 20px var(--font-display)" id="limits">Ответственная игра</h3>${excl}${pend}
     <div class="field"><label for="ldep">Дневной лимит депозита, ${cur()} (0 = без лимита)</label><input class="inp" id="ldep" type="number" min="0" step="1000" value="${L.depositDaily ? (B.mode === 'api' ? L.depositDaily / 100 : L.depositDaily) : 0}"></div>
     <div class="field"><label for="lloss">Дневной лимит проигрыша, ${cur()} (0 = без лимита)</label><input class="inp" id="lloss" type="number" min="0" step="1000" value="${L.lossDaily ? (B.mode === 'api' ? L.lossDaily / 100 : L.lossDaily) : 0}"></div>
     <div class="field"><label for="lreal">Напоминать о времени в игре каждые, минут (0 = выкл.)</label><input class="inp" id="lreal" type="number" min="0" max="240" step="5" value="${L.realityCheckMin || 0}"></div>
     <div class="field"><label for="lex">Самоисключение</label><select class="inp" id="lex"><option value="0">Не включать</option><option value="1">На 24 часа</option><option value="7">На 7 дней</option><option value="30">На 30 дней</option><option value="180">На 6 месяцев</option></select></div>
     <p class="muted" style="margin:0;font-size:12px">Снижение лимита действует сразу. Повышение или снятие лимита вступает в силу через 24 часа. Самоисключение нельзя отменить досрочно.</p>
+    <div id="lconfirm"></div>
     <button class="btn gold block" type="button" id="lsave">Сохранить лимиты</button>
     <button class="btn ghost block" type="button" id="logout">Выйти</button></div>`);
 }
-async function saveLimits() {
+async function saveLimits(confirmed = false) {
   const k = B.mode === 'api' ? 100 : 1, v = id => Math.max(0, +$('#' + id).value || 0);
   const ex = +$('#lex').value;
+  if (ex && !confirmed) {
+    const until = new Date(Date.now() + ex * 864e5).toLocaleString('ru-RU');
+    $('#lconfirm').innerHTML = `<div class="note" style="border-color:var(--loss)"><b style="color:var(--loss)">Самоисключение до ${until}.</b> Его нельзя отменить досрочно. Ставки и пополнения будут недоступны, вывод останется. Новый аккаунт на ваше имя тоже будет заблокирован.<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn gold" type="button" id="lsave-confirm">Да, включить самоисключение</button><button class="btn ghost" type="button" id="lsave-cancel">Отмена</button></div></div>`;
+    return;
+  }
   const body = { depositDaily: v('ldep') * k || null, lossDaily: v('lloss') * k || null, realityCheckMin: v('lreal') || null, ...(ex ? { selfExcludeDays: ex } : {}) };
   try {
     const r = await run(() => B.setLimits(body));
@@ -802,6 +891,40 @@ async function saveLimits() {
     applyReality(); openAccount();
   } catch (e) {}
 }
+async function twofaOn() {
+  try {
+    const r = await run(() => B.twofaSetup());
+    $('#secbox').innerHTML = `<div class="note"><b>1.</b> Добавьте ключ в Google Authenticator, 1Password или аналог:<div class="cred" style="margin:8px 0"><span>Ключ</span>${esc(r.secret)}</div><b>2.</b> Введите 6-значный код из приложения:<div style="display:flex;gap:8px;margin-top:8px"><input class="inp" id="tfa-code" inputmode="numeric" maxlength="6" style="max-width:160px"><button class="btn gold" type="button" id="tfa-confirm">Подтвердить</button></div></div>`;
+  } catch (e) {}
+}
+function twofaOff() {
+  $('#secbox').innerHTML = `<div class="note">Чтобы отключить 2FA, введите пароль и код. После отключения вывод будет недоступен 24 часа.<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input class="inp" id="tfa-pass" type="password" placeholder="Пароль" style="max-width:200px"><input class="inp" id="tfa-code" inputmode="numeric" maxlength="6" placeholder="Код" style="max-width:120px"><button class="btn ghost" type="button" id="tfa-disable">Отключить</button></div></div>`;
+}
+async function sessionsBox() {
+  const list = await quiet(B.sessions()) || [];
+  $('#secbox').innerHTML = `<div class="note">${list.map(s => `<div class="kv" style="padding:4px 0"><span>${esc((s.user_agent || '').replace(/\(.*?\)/g, '').slice(0, 40) || 'Устройство')} · ${esc(s.ip || '')}</span><b style="font-family:var(--font-ui)">${s.current ? 'это устройство' : new Date(s.last_seen).toLocaleString('ru-RU')}</b></div>`).join('')}
+    ${list.length > 1 ? '<button class="btn ghost" type="button" id="sess-kill" style="margin-top:8px">Завершить все другие сеансы</button>' : ''}</div>`;
+}
+function passwordBox() {
+  $('#secbox').innerHTML = `<div class="note">После смены пароля все другие сеансы завершатся, а вывод будет недоступен 24 часа.<div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap"><input class="inp" id="pw-cur" type="password" placeholder="Текущий пароль" autocomplete="current-password" style="max-width:200px"><input class="inp" id="pw-new" type="password" placeholder="Новый, от 10 символов" autocomplete="new-password" style="max-width:220px"><button class="btn gold" type="button" id="pw-save">Сменить</button></div></div>`;
+}
+
+/** Plain-language terms: what players agree to. Values come from the server configuration where available. */
+function openRules() {
+  const c = S.cfg || {}, b = c.bonus || { wager: 30, days: 30, max: 300_000_00 }, w = b.casinoWeights || { slot: 1, crash: 0.2, mines: 0.2, roulette: 0.1, dice: 0.1 };
+  const pct = x => Math.round(x * 100) + '%';
+  const sec = (t, items) => `<h4 class="eyebrow" style="margin:6px 0 0">${t}</h4><ul style="margin:0;padding-left:18px;color:var(--muted);display:flex;flex-direction:column;gap:4px">${items.map(i => `<li>${i}</li>`).join('')}</ul>`;
+  openModal(head('Правила и условия') + `<div class="d-body">
+    ${sec('Аккаунт', ['Играть можно с 18 лет. Один человек — один аккаунт. Повторные аккаунты блокируются после проверки документов.', 'Для вывода нужна верификация личности. Документы проверяет специализированный провайдер.', 'Вы отвечаете за сохранность пароля. Включите 2FA в профиле, чтобы защитить аккаунт.'])}
+    ${sec('Приветственный бонус', [`100% от первого депозита, до ${fmt(b.max / 100)}. Начисляется на бонусный счёт и переходит на основной после отыгрыша ×${b.wager} суммы бонуса за ${b.days} дней.`, `Казино: слоты засчитываются на ${pct(w.slot)}, Crash и Мины на ${pct(w.crash)}, рулетка и Dice на ${pct(w.dice)} от ставки.`, `Спорт: засчитываются рассчитанные экспрессы от ${b.sport?.minLegs ?? 3} событий с коэффициентом каждого от ${(b.sport?.minLegOdds ?? 1.4).toFixed(2).replace('.', ',')}. Возвраты не засчитываются.`, 'Один бонус на человека и на платёжную карту. Вывод до окончания отыгрыша аннулирует бонус (собственные деньги остаются).'])}
+    ${sec('Кэшбэк', [`Каждый понедельник возвращаем ${c.cashback?.pct ?? 10}% чистого проигрыша за прошлую неделю, до ${fmt((c.cashback?.max ?? 1_000_000_00) / 100)}. Без вейджера.`, 'Кэшбэк не начисляется за неделю, в которой у вас был активный бонус.'])}
+    ${sec('Ставки на спорт', ['Ставка принимается по коэффициенту на момент подтверждения сервером. Поведение при изменении коэффициента выбирается в купоне.', `Live-ставки принимаются с задержкой до ${Math.round((c.liveBetDelayMs ?? 5000) / 1000)} секунд и отклоняются, если за это время рынок закрылся или коэффициент изменился.`, 'Если событие отменено, ставка на него возвращается (в экспрессе коэффициент события считается равным 1).', 'Ставки по явно ошибочным коэффициентам (опечатка в линии) могут быть пересчитаны по рыночному коэффициенту.', 'Оператор может ограничить максимальную ставку для отдельных игроков.'])}
+    ${sec('Казино', ['RTP каждой игры указан на её карточке. Все исходы проверяемы (Provably Fair).', `Максимальный выигрыш за один раунд или одну ставку: ${fmt(maxWin())}.`, 'Незавершённые раунды Мин сохраняются, раунд Crash завершается по часам сервера, даже если вы закрыли окно.'])}
+    ${sec('Пополнение и вывод', ['Вывод только на карту или кошелёк, с которого вы пополняли счёт.', 'Перед выводом нужно сделать ставки на сумму пополнений (защита от отмывания денег).', 'После смены пароля или 2FA вывод недоступен 24 часа.', 'При отзыве платежа через банк (chargeback) аккаунт блокируется до выяснения обстоятельств.'])}
+    ${sec('Ответственная игра', ['Лимиты депозита и проигрыша, напоминания о времени и самоисключение доступны в профиле.', 'Снижение лимита действует сразу, повышение — через 24 часа. Самоисключение нельзя отменить досрочно.'])}
+  </div>`);
+}
+
 let realityTimer = null; const sessionStart = Date.now();
 function applyReality() { clearInterval(realityTimer); const m = S.limits?.realityCheckMin; if (m > 0) realityTimer = setInterval(() => toast(`Вы в игре уже ${Math.round((Date.now() - sessionStart) / 60000)} мин. Баланс: ${fmt(S.balance)}. Сделайте паузу, если нужно.`), m * 60000); }
 
@@ -830,6 +953,7 @@ function renderAcct() {
 const VIEWS = { home: 'home', sport: 'sport', live: 'sport', casino: 'casino', livecasino: 'casino', fast: 'casino', promo: 'promo' };
 function route() {
   let v = location.hash.slice(1);
+  if (v.startsWith('kyc-')) { const st = v.slice(4); toast({ verified: 'Личность подтверждена, вывод доступен', pending: 'Документы на дополнительной проверке', rejected: 'Верификация не пройдена. Обратитесь в поддержку.' }[st] || 'Статус верификации обновлён', st === 'verified' ? 'ok' : st === 'pending' ? '' : 'err'); B.refresh(); history.replaceState(null, '', '#home'); v = 'home'; }
   if (v.startsWith('deposit-')) { toast(v === 'deposit-succeeded' ? 'Оплата прошла, деньги зачислены' : 'Оплата отклонена', v === 'deposit-succeeded' ? 'ok' : 'err'); B.refresh(); history.replaceState(null, '', '#home'); v = 'home'; }
   if (!VIEWS[v]) v = 'home';
   Object.values(VIEWS).forEach(x => $('#v-' + x).hidden = x !== VIEWS[v]);
@@ -861,11 +985,24 @@ document.addEventListener('click', async e => {
   if (d.wq) { $('#wamt').value = d.wq === 'Всё' ? Math.floor(S.balance) : d.wq; return; }
   if (d.wcancel) { try { await run(() => B.cancelWithdrawal(+d.wcancel)); toast('Заявка на вывод отменена, деньги вернулись на счёт', 'ok'); await B.refresh(); renderWallet(); } catch (err) {} return; }
   if (d.atab) { aTab = d.atab; openAuth(); return; }
+  if (d.inst) { wInst = +d.inst; renderWallet(); return; }
   switch (t.id) {
     case 'place': placeBet(); return;
     case 'clear-slip': S.slip = []; S.slipMode = 'single'; renderSport(); renderSlip(); return;
     case 'slip-fab': $('#slip').classList.toggle('open'); return;
     case 'wgo': walletGo(); return;
+    case 'wforfeit': walletGo(true); return;
+    case 'wkeep': $('#wconfirm').innerHTML = ''; if ($('#wgo')) $('#wgo').hidden = false; return;
+    case 'lsave-confirm': saveLimits(true); return;
+    case 'lsave-cancel': $('#lconfirm').innerHTML = ''; $('#lex').value = '0'; return;
+    case 'tfa-on': twofaOn(); return;
+    case 'tfa-off': twofaOff(); return;
+    case 'tfa-confirm': try { await run(() => B.twofaEnable($('#tfa-code').value.trim())); toast('2FA включена: при входе понадобится код из приложения', 'ok'); openAccount(); } catch (err) {} return;
+    case 'tfa-disable': try { await run(() => B.twofaDisable($('#tfa-pass').value, $('#tfa-code').value.trim())); toast('2FA отключена. Вывод будет доступен через 24 часа.', 'ok'); openAccount(); } catch (err) {} return;
+    case 'sess': sessionsBox(); return;
+    case 'sess-kill': try { const r = await run(() => B.revokeOthers()); toast(`Завершено сеансов: ${r.revoked}`, 'ok'); sessionsBox(); } catch (err) {} return;
+    case 'pwd': passwordBox(); return;
+    case 'pw-save': { const nx = $('#pw-new').value; if (nx.length < 10) { toast('Новый пароль должен быть не короче 10 символов', 'err'); return; } try { await run(() => B.changePassword($('#pw-cur').value, nx)); toast('Пароль изменён. Другие сеансы завершены.', 'ok'); openAccount(); } catch (err) {} return; }
     case 'ago': doRegister(); return;
     case 'alog': doLogin(); return;
     case 'lsave': saveLimits(); return;
@@ -878,12 +1015,14 @@ document.addEventListener('click', async e => {
     case 'account': openAccount(); break;
     case 'limits': S.user ? openAccount() : (toast('Лимиты доступны после регистрации'), openAuth('register')); break;
     case 'fair': openFair(); break;
-    case 'kyc': try { const r = await run(() => B.kycStart()); toast(r.message || 'Заявка на верификацию отправлена', 'ok'); if (!$('#modal').hidden) openAccount(); } catch (err) {} break;
+    case 'kyc': try { const r = await run(() => B.kycStart()); if (r.url) { location.href = r.url; break; } toast(r.message || (r.status === 'verified' ? 'Верификация уже пройдена' : 'Верификация на проверке'), 'ok'); } catch (err) {} break;
+    case 'rules': openRules(); break;
   }
 });
 document.addEventListener('input', e => {
   if (e.target.id === 'stake') { S.stake = Math.max(0, +e.target.value || 0); const c = slipCalc(); const k = $$('#slip-body .kv b'); if (k.length) { k[k.length - 1].textContent = fmt(c.win); k[k.length - 2].textContent = fmt(c.total); } }
   if (e.target.id === 'gsearch') { S.q = e.target.value; renderCasino(); }
+  if (e.target.id === 'accept') { S.accept = e.target.value; store.set('accept', S.accept); }
 });
 document.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.target.id === 'apass' || e.target.id === 'alogin') && $('#alog')) doLogin(); });
 
@@ -902,7 +1041,8 @@ async function detectBackend() {
   if (cfg) {
     B = ApiBackend; S.cfg = cfg; S.mode = 'api';
     $('#mode-note').innerHTML = cfg.sandbox ? '<b>Тестовый режим.</b> Платежи идут через песочницу, реальные деньги не списываются.' : '<b>18+</b> Играйте ответственно. Установите лимиты в профиле.';
-    $('#footer-note').textContent = 'Оператор работает по лицензии. Все исходы проверяемы, RTP и маржа указаны открыто.';
+    $('#footer-note').textContent = cfg.licenseText || 'Все исходы проверяемы, RTP и маржа указаны открыто.';
+    if (cfg.turnstileSiteKey) { const sc = document.createElement('script'); sc.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit'; sc.async = true; document.head.appendChild(sc); }
   }
   await quiet(B.init());
   renderAcct(); await loadEvents(); renderHomeLive(); route(); renderSlip(); applyReality();

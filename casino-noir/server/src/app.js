@@ -26,6 +26,8 @@ export async function buildApp({ cfg, pool, logger = true }) {
     logger: logger && {
       level: cfg.LOG_LEVEL,
       redact: ['req.headers.cookie', 'req.headers.authorization', 'req.headers["x-csrf-token"]', 'res.headers["set-cookie"]'],
+      // Query strings can carry personal data (back-office search by e-mail/phone): log the path only.
+      serializers: { req: r => ({ method: r.method, url: String(r.url).split('?')[0], ip: r.ip }) },
     },
   });
 
@@ -39,7 +41,9 @@ export async function buildApp({ cfg, pool, logger = true }) {
     contentSecurityPolicy: {
       useDefaults: false,
       directives: {
-        defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        defaultSrc: ["'self'"], scriptSrc: ["'self'", ...(cfg.TURNSTILE_SITE_KEY ? ['https://challenges.cloudflare.com'] : [])],
+        frameSrc: cfg.TURNSTILE_SITE_KEY ? ['https://challenges.cloudflare.com'] : ["'none'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
         fontSrc: ["'self'", 'https://fonts.gstatic.com'], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"],
         formAction: ["'self'"], frameAncestors: ["'none'"], baseUri: ["'none'"], objectSrc: ["'none'"],
         ...(cfg.COOKIE_SECURE ? { upgradeInsecureRequests: [] } : {}),

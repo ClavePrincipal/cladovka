@@ -2,7 +2,7 @@
 import { tx } from './db.js';
 import { post, balances } from './ledger.js';
 import { assertCanPlay } from './rg.js';
-import { progress } from './bonus.js';
+import { progressSport } from './bonus.js';
 import { fail } from './errors.js';
 import { metrics } from './metrics.js';
 
@@ -29,7 +29,9 @@ export function makeSport({ pool, cfg }) {
         if (res && res !== s.result) { await c.query('UPDATE sport_selections SET result=$3 WHERE bet_id=$1 AND event_id=$2', [b.id, s.event_id, res]); s.result = res; }
       }
       if (sels.some(s => s.result === 'lost')) {
-        await c.query(`UPDATE sport_bets SET status='lost', settled_at=now() WHERE id=$1`, [b.id]); settled++; continue;
+        await c.query(`UPDATE sport_bets SET status='lost', settled_at=now() WHERE id=$1`, [b.id]);
+        await progressSport(c, b.user_id, { ...b, status: 'lost' }, sels);
+        settled++; continue;
       }
       if (sels.some(s => !s.result)) continue; // wait for the remaining legs
       const live = sels.filter(s => s.result === 'won');
@@ -44,28 +46,23 @@ export function makeSport({ pool, cfg }) {
       await post(c, { userId: b.user_id, type: status === 'void' ? 'refund' : 'win', amount: payout, refType: 'sport_bet', refId: b.id,
         key: `sport:settle:${b.id}`, meta: { product: 'sport' } });
       metrics.payout.inc({ product: 'sport' }, payout);
+      await progressSport(c, b.user_id, { ...b, status }, sels);
       settled++;
     }
     return settled;
   }
 
-  return {
-    list: async () => (await pool.query(`SELECT * FROM sport_events WHERE status IN ('scheduled','live','suspended')
-      ORDER BY (status='live') DESC, starts_at LIMIT 500`)).rows.map(pub),
-
-    /**
-     * selections: [{ eventId, outcome, odds }] — odds the player saw. If any current price is lower, the bet is
-     * rejected with ODDS_CHANGED and the new prices so the client can ask the player to confirm.
-     */
-    place: (userId, { kind, stake, selections }) => tx(pool, async c => {
+  const placeNow = (userId, { kind, stake, selections, acceptChanges }) => tx(pool, async c => {
       if (!Number.isSafeInteger(stake) || stake < cfg.MIN_BET) fail('BET_TOO_SMALL', `Минимальная ставка ${cfg.MIN_BET / 100}`, 400);
       if (!Array.isArray(selections) || !selections.length || selections.length > 20) fail('VALIDATION', 'От 1 до 20 событий в купоне', 400);
       const ids = selections.map(s => s.eventId);
       if (new Set(ids).size !== ids.length) fail('VALIDATION', 'Одно событие можно добавить в купон только один раз', 400);
       if (kind === 'express' && selections.length < 2) fail('VALIDATION', 'В экспрессе минимум 2 события', 400);
-      const user = (await c.query('SELECT id, status FROM users WHERE id=$1 FOR UPDATE', [userId])).rows[0];
+      const user = (await c.query('SELECT id, status, stake_factor FROM users WHERE id=$1 FOR UPDATE', [userId])).rows[0];
+      if (!(user.stake_factor > 0)) fail('SPORT_RESTRICTED', 'Ставки на спорт для вашего аккаунта ограничены. Обратитесь в поддержку.', 403);
+      const maxStake = Math.floor(cfg.MAX_BET * Math.min(1, user.stake_factor));
       const total = kind === 'express' ? stake : stake * selections.length;
-      if (total > cfg.MAX_BET) fail('BET_TOO_LARGE', `Максимальная ставка ${cfg.MAX_BET / 100}`, 400);
+      if (total > maxStake) fail('BET_TOO_LARGE', `Максимальная ставка для вашего аккаунта: ${maxStake / 100}`, 400);
       await assertCanPlay(c, user, total);
       const evs = (await c.query(`SELECT * FROM sport_events WHERE id = ANY($1) FOR SHARE`, [ids])).rows;
       const byId = new Map(evs.map(e => [e.id, e]));
@@ -75,7 +72,9 @@ export function makeSport({ pool, cfg }) {
         if (!e || !['scheduled', 'live'].includes(e.status) || (e.status === 'scheduled' && e.starts_at <= new Date()))
           fail('EVENT_CLOSED', `Приём ставок на событие закрыт`, 409, { eventId: s.eventId });
         if (![0, 1, 2].includes(s.outcome) || !(e.odds[s.outcome] > 1)) fail('VALIDATION', 'Исход недоступен', 400);
-        if (e.odds[s.outcome] < s.odds) changed.push({ eventId: e.id, outcome: s.outcome, odds: e.odds[s.outcome] });
+        const now = e.odds[s.outcome];
+        const bad = acceptChanges === 'none' ? now !== s.odds : acceptChanges === 'any' ? false : now < s.odds;
+        if (bad) changed.push({ eventId: e.id, outcome: s.outcome, odds: now });
       }
       if (changed.length) fail('ODDS_CHANGED', 'Коэффициенты изменились. Проверьте купон.', 409, { changed });
 
@@ -90,12 +89,29 @@ export function makeSport({ pool, cfg }) {
           [userId, kind === 'express' ? 'express' : 'single', stake, Math.round(odds * 100) / 100, boost])).rows[0];
         for (const l of g) await c.query('INSERT INTO sport_selections (bet_id, event_id, outcome, odds) VALUES ($1,$2,$3,$4)', [b.id, l.eventId, l.outcome, l.odds]);
         await post(c, { userId, type: 'bet', amount: -stake, refType: 'sport_bet', refId: b.id, key: `sport:bet:${b.id}`, meta: { product: 'sport' } });
-        await progress(c, userId, stake);
         metrics.bets.inc({ product: 'sport' }); metrics.stake.inc({ product: 'sport' }, stake);
         created.push(b.id);
       }
       return { betIds: created, balance: (await balances(c, userId)).cash };
-    }),
+    });
+
+  return {
+    list: async () => (await pool.query(`SELECT * FROM sport_events WHERE status IN ('scheduled','live','suspended')
+      ORDER BY (status='live') DESC, starts_at LIMIT 500`)).rows.map(pub),
+
+    /**
+     * selections: [{ eventId, outcome, odds }] — odds the player saw.
+     * acceptChanges: 'none' (any change → ODDS_CHANGED), 'higher' (default: accept only better prices), 'any'.
+     * Live bets wait LIVE_BET_DELAY_MS and are then re-validated, so a bettor who sees a goal before
+     * the trader/feed suspends the market (courtsiding) cannot take a stale price.
+     */
+    place: async (userId, { kind, stake, selections, acceptChanges = 'higher' }) => {
+      if (cfg.LIVE_BET_DELAY_MS > 0 && Array.isArray(selections) && selections.length) {
+        const live = await pool.query(`SELECT 1 FROM sport_events WHERE id = ANY($1) AND status = 'live' LIMIT 1`, [selections.map(s => s.eventId)]);
+        if (live.rowCount) await new Promise(r => setTimeout(r, cfg.LIVE_BET_DELAY_MS));
+      }
+      return placeNow(userId, { kind, stake, selections, acceptChanges });
+    },
 
     myBets: async userId => {
       const bets = (await pool.query(`SELECT * FROM sport_bets WHERE user_id=$1 ORDER BY id DESC LIMIT 50`, [userId])).rows;

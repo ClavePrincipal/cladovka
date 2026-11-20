@@ -3,7 +3,7 @@ import { tx } from '../lib/db.js';
 import { post, balances } from '../lib/ledger.js';
 import { nextFloats } from '../lib/fair.js';
 import { assertCanPlay } from '../lib/rg.js';
-import { progress } from '../lib/bonus.js';
+import { progressCasino } from '../lib/bonus.js';
 import { onBigWin } from '../lib/aml.js';
 import { fail } from '../lib/errors.js';
 import { metrics } from '../lib/metrics.js';
@@ -28,7 +28,7 @@ export function makeCasino({ pool, cfg }) {
 
   async function debit(c, user, game, bet, roundId) {
     await post(c, { userId: user.id, type: 'bet', amount: -bet, refType: 'round', refId: roundId, key: `bet:round:${roundId}`, meta: { game } });
-    await progress(c, user.id, bet);
+    await progressCasino(c, user.id, game, bet);
     metrics.bets.inc({ product: game }); metrics.stake.inc({ product: game }, bet);
   }
 
@@ -171,7 +171,7 @@ export function makeCasino({ pool, cfg }) {
       const r = (await c.query(`SELECT * FROM game_rounds WHERE user_id=$1 AND game='crash' AND status='open' FOR UPDATE`, [userId])).rows[0];
       if (!r) return { open: false };
       const now = Date.now(), { point, startedAt } = r.state;
-      if (now - startedAt < M.crashTimeMs(point)) return { open: true, roundId: r.id, elapsed: Math.max(0, now - startedAt), auto: r.state.auto };
+      if (now - startedAt < M.crashTimeMs(point)) return { open: true, roundId: r.id, bet: r.bet, elapsed: Math.max(0, now - startedAt), auto: r.state.auto };
       return settleCrash(c, r, now, false);
     }),
 

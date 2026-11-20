@@ -9,6 +9,8 @@ import { getLimits, setLimits } from '../lib/rg.js';
 import { onRegister } from '../lib/aml.js';
 import { metrics } from '../lib/metrics.js';
 import { RTP } from '../games/math.js';
+import { CASINO_WEIGHTS, SPORT_RULES } from '../lib/bonus.js';
+import { totpVerify, base32Encode } from '../lib/crypto.js';
 
 const ARGON = { memoryCost: 19456, timeCost: 2, parallelism: 1 }; // OWASP 2024 baseline for argon2id
 const DUMMY_HASH = await hash('timing-equaliser', ARGON);
@@ -29,16 +31,27 @@ export default async function playerRoutes(app) {
     req.session = s; req.user = u;
   };
 
+  /** Optional Cloudflare Turnstile CAPTCHA for registration and login (bots, credential stuffing). */
+  async function captcha(req) {
+    if (!cfg.TURNSTILE_SECRET) return;
+    const token = req.body?.captcha;
+    if (!token) fail('CAPTCHA', 'Подтвердите, что вы не робот', 400);
+    const r = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', { method: 'POST',
+      body: new URLSearchParams({ secret: cfg.TURNSTILE_SECRET, response: String(token), remoteip: req.ip }) }).then(x => x.json()).catch(() => null);
+    if (!r?.success) fail('CAPTCHA', 'Проверка «я не робот» не пройдена. Обновите страницу и попробуйте ещё раз.', 400);
+  }
+
   async function profile(userId, csrf) {
     const u = (await pool.query('SELECT * FROM users WHERE id=$1', [userId])).rows[0];
     const [bal, limits, bonus] = await Promise.all([
       balances(pool, userId),
       tx(pool, c => getLimits(c, userId)),
-      pool.query(`SELECT amount, wager_req, wagered, expires_at FROM bonuses WHERE user_id=$1 AND status='active'`, [userId]),
+      pool.query(`SELECT amount, wager_req, wagered, expires_at, product FROM bonuses WHERE user_id=$1 AND status='active'`, [userId]),
     ]);
     return {
       csrf, user: { id: u.public_id, name: pii.dec(u.email_enc) || pii.dec(u.phone_enc) || 'ID ' + u.public_id, currency: u.currency,
-        kycStatus: u.kyc_status, status: u.status, since: u.created_at },
+        kycStatus: u.kyc_status, status: u.status, since: u.created_at, totpEnabled: u.totp_enabled, securityHoldUntil: u.security_hold_until,
+        bonusPref: u.bonus_pref },
       balance: bal.cash, bonusBalance: bal.bonus, pendingWithdrawals: bal.withdraw_hold,
       bonus: bonus.rows[0] || null,
       limits: { depositDaily: limits.deposit_daily, depositWeekly: limits.deposit_weekly, depositMonthly: limits.deposit_monthly,
@@ -48,8 +61,12 @@ export default async function playerRoutes(app) {
   }
 
   app.get('/config', async () => ({
-    sandbox: cfg.PAYMENT_PROVIDERS.includes('sandbox'), currency: cfg.CURRENCY, minBet: cfg.MIN_BET, maxBet: cfg.MAX_BET, methods: svc.payments.methods(), rtp: RTP,
-    bonus: { pct: cfg.WELCOME_BONUS_PCT, max: cfg.WELCOME_BONUS_MAX, wager: cfg.BONUS_WAGER, days: cfg.BONUS_DAYS },
+    sandbox: cfg.PAYMENT_PROVIDERS.includes('sandbox'), currency: cfg.CURRENCY, minBet: cfg.MIN_BET, maxBet: cfg.MAX_BET, maxPayout: cfg.MAX_PAYOUT,
+    methods: svc.payments.methods(), rtp: RTP, kyc: !!cfg.KYC_PROVIDER, liveBetDelayMs: cfg.LIVE_BET_DELAY_MS,
+    turnstileSiteKey: cfg.TURNSTILE_SITE_KEY || null, licenseText: cfg.LICENSE_TEXT || null,
+    bonus: { pct: cfg.WELCOME_BONUS_PCT, max: cfg.WELCOME_BONUS_MAX, wager: cfg.BONUS_WAGER, days: cfg.BONUS_DAYS, casinoWeights: CASINO_WEIGHTS, sport: SPORT_RULES },
+    cashback: { pct: cfg.CASHBACK_PCT, max: cfg.CASHBACK_MAX },
+    withdrawals: { autoApproveUpTo: cfg.AUTO_APPROVE_WITHDRAWAL, securityHoldHours: cfg.SECURITY_HOLD_HOURS },
   }));
 
   /* ---------------- auth ---------------- */
@@ -62,10 +79,13 @@ export default async function playerRoutes(app) {
       phone: z.string().max(30).regex(/^\+?[0-9\s()-]{10,20}$/, 'неверный номер').optional(),
       password: z.string().min(10, 'минимум 10 символов').max(200).optional(),
       birthDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'формат ГГГГ-ММ-ДД'),
-      currency: z.enum(['KZT', 'RUB', 'USD', 'UZS']).default('KZT'),
+      currency: z.string().optional(),   // ignored: one currency per deployment (see CURRENCY)
       bonusPref: z.enum(['casino', 'sport', 'none']).default('casino'),
       acceptTerms: z.literal(true, { message: 'нужно принять правила' }),
+      captcha: z.string().max(4000).optional(),
     }), req.body);
+    await captcha(req);
+    b.currency = cfg.CURRENCY;
     const bd = new Date(b.birthDate + 'T00:00:00Z');
     const adult = new Date(bd); adult.setUTCFullYear(adult.getUTCFullYear() + 18);
     if (isNaN(bd) || adult > new Date()) fail('AGE', 'Регистрация доступна только с 18 лет', 403);
@@ -97,22 +117,34 @@ export default async function playerRoutes(app) {
   });
 
   app.post('/auth/login', { ...authLimit, preHandler: sameOrigin }, async (req, reply) => {
-    const b = parse(z.object({ login: z.string().min(3).max(200), password: z.string().min(1).max(200) }), req.body);
+    const b = parse(z.object({ login: z.string().min(3).max(200), password: z.string().min(1).max(200),
+      totp: z.string().max(6).optional(), captcha: z.string().max(4000).optional() }), req.body);
+    await captcha(req);
     const login = b.login.trim();
     let u;
     if (/^\d{9}$/.test(login)) u = (await pool.query('SELECT * FROM users WHERE public_id=$1', [login])).rows[0];
     else if (login.includes('@')) u = (await pool.query('SELECT * FROM users WHERE email_hash=$1', [pii.lookup(login)])).rows[0];
     else u = (await pool.query('SELECT * FROM users WHERE phone_hash=$1', [pii.lookup('+' + login.replace(/\D/g, ''))])).rows[0];
-    if (u?.locked_until && u.locked_until > new Date()) fail('LOCKED', 'Слишком много попыток. Попробуйте через 15 минут.', 429);
-    const ok = await verify(u?.password_hash || DUMMY_HASH, b.password);
-    if (!u || !ok || u.status === 'closed') {
-      if (u) await pool.query(`UPDATE users SET failed_logins = failed_logins + 1,
-        locked_until = CASE WHEN failed_logins + 1 >= 5 THEN now() + interval '15 minutes' ELSE locked_until END
-        WHERE id=$1`, [u.id]);
-      metrics.logins.inc({ kind: 'player', result: 'fail' });
-      fail('BAD_LOGIN', 'Неверный логин или пароль', 401);
+    // Lockout is counted per (account, IP): an attacker cannot lock the real owner out from the owner's own network.
+    // A distributed attack on one account (many IPs) still locks it after LOGIN_FAILS_PER_ACCOUNT failures.
+    if (u) {
+      const f = (await pool.query(`SELECT COUNT(*) FILTER (WHERE ip = $2)::int AS ip, COUNT(*)::int AS total FROM login_failures
+        WHERE user_id = $1 AND at > now() - interval '15 minutes'`, [u.id, req.ip])).rows[0];
+      if (f.ip >= cfg.LOGIN_FAILS_PER_IP || f.total >= cfg.LOGIN_FAILS_PER_ACCOUNT) fail('LOCKED', 'Слишком много неудачных попыток входа. Попробуйте через 15 минут.', 429);
     }
-    await pool.query(`UPDATE users SET failed_logins=0, locked_until=NULL, last_login_at=now(), last_ip=$2 WHERE id=$1`, [u.id, req.ip]);
+    const ok = await verify(u?.password_hash || DUMMY_HASH, b.password);
+    const failLogin = async (code = 'BAD_LOGIN', msg = 'Неверный логин или пароль') => {
+      if (u) await pool.query('INSERT INTO login_failures (user_id, ip) VALUES ($1,$2)', [u.id, req.ip]);
+      metrics.logins.inc({ kind: 'player', result: 'fail' });
+      fail(code, msg, 401);
+    };
+    if (!u || !ok || u.status === 'closed') await failLogin();
+    if (u.totp_enabled) {
+      if (!b.totp) fail('TOTP_REQUIRED', 'Введите код из приложения-аутентификатора', 401);
+      if (!totpVerify(pii.dec(u.totp_secret_enc), b.totp)) await failLogin('BAD_TOTP', 'Неверный код 2FA');
+    }
+    await pool.query('DELETE FROM login_failures WHERE user_id=$1 AND ip=$2', [u.id, req.ip]);
+    await pool.query(`UPDATE users SET last_login_at=now(), last_ip=$2 WHERE id=$1`, [u.id, req.ip]);
     await audit(null, { actorType: 'user', actorId: u.id, action: 'login', ip: req.ip });
     metrics.logins.inc({ kind: 'player', result: 'ok' });
     return profile(u.id, await sessions.create(reply, req, { userId: u.id }));
@@ -130,10 +162,45 @@ export default async function playerRoutes(app) {
   app.post('/me/password', { preHandler: requireUser, ...authLimit }, async (req, reply) => {
     const b = parse(z.object({ current: z.string().max(200), next: z.string().min(10, 'минимум 10 символов').max(200) }), req.body);
     if (!(await verify(req.user.password_hash, b.current))) fail('BAD_LOGIN', 'Текущий пароль неверен', 401);
-    await pool.query('UPDATE users SET password_hash=$2 WHERE id=$1', [req.user.id, await hash(b.next, ARGON)]);
+    await pool.query(`UPDATE users SET password_hash=$2, security_hold_until = now() + make_interval(hours => $3) WHERE id=$1`,
+      [req.user.id, await hash(b.next, ARGON), cfg.SECURITY_HOLD_HOURS]);
     await sessions.revokeAllFor('user', req.user.id);
     await audit(null, { actorType: 'user', actorId: req.user.id, action: 'password_change', ip: req.ip });
     return profile(req.user.id, await sessions.create(reply, req, { userId: req.user.id }));
+  });
+
+  /* ---- two-factor authentication (optional for players, protects against account takeover) ---- */
+  app.post('/me/2fa/setup', { preHandler: requireUser, ...authLimit }, async (req) => {
+    if (req.user.totp_enabled) fail('VALIDATION', '2FA уже включена', 409);
+    const secret = base32Encode(crypto.randomBytes(20));
+    await pool.query('UPDATE users SET totp_secret_enc=$2 WHERE id=$1', [req.user.id, pii.enc(secret)]);
+    return { secret, otpauth: `otpauth://totp/NOIR:${req.user.public_id}?secret=${secret}&issuer=NOIR` };
+  });
+  app.post('/me/2fa/enable', { preHandler: requireUser, ...authLimit }, async (req) => {
+    const b = parse(z.object({ code: z.string().max(6) }), req.body);
+    if (!req.user.totp_secret_enc || !totpVerify(pii.dec(req.user.totp_secret_enc), b.code)) fail('BAD_TOTP', 'Неверный код. Проверьте время на телефоне и попробуйте ещё раз.', 400);
+    await pool.query('UPDATE users SET totp_enabled=true WHERE id=$1', [req.user.id]);
+    await audit(null, { actorType: 'user', actorId: req.user.id, action: '2fa_enable', ip: req.ip });
+    return profile(req.user.id, req.session.csrf_token);
+  });
+  app.post('/me/2fa/disable', { preHandler: requireUser, ...authLimit }, async (req) => {
+    const b = parse(z.object({ password: z.string().max(200), code: z.string().max(6) }), req.body);
+    if (!(await verify(req.user.password_hash, b.password))) fail('BAD_LOGIN', 'Неверный пароль', 401);
+    if (!req.user.totp_enabled || !totpVerify(pii.dec(req.user.totp_secret_enc), b.code)) fail('BAD_TOTP', 'Неверный код 2FA', 400);
+    await pool.query(`UPDATE users SET totp_enabled=false, totp_secret_enc=NULL, security_hold_until = now() + make_interval(hours => $2) WHERE id=$1`,
+      [req.user.id, cfg.SECURITY_HOLD_HOURS]);
+    await audit(null, { actorType: 'user', actorId: req.user.id, action: '2fa_disable', ip: req.ip });
+    return profile(req.user.id, req.session.csrf_token);
+  });
+
+  /* ---- active sessions ---- */
+  app.get('/me/sessions', { preHandler: requireUser }, async (req) => (await pool.query(`SELECT id, ip, user_agent, created_at, last_seen FROM sessions
+    WHERE user_id=$1 AND revoked_at IS NULL AND expires_at > now() ORDER BY last_seen DESC LIMIT 20`, [req.user.id])).rows
+    .map(r => ({ ...r, current: r.id === req.session.id })));
+  app.post('/me/sessions/revoke-others', { preHandler: requireUser }, async (req) => {
+    const r = await pool.query(`UPDATE sessions SET revoked_at=now() WHERE user_id=$1 AND id<>$2 AND revoked_at IS NULL`, [req.user.id, req.session.id]);
+    await audit(null, { actorType: 'user', actorId: req.user.id, action: 'sessions_revoke_others', ip: req.ip, details: { count: r.rowCount } });
+    return { revoked: r.rowCount };
   });
 
   app.post('/me/limits', { preHandler: requireUser }, async (req) => {
@@ -165,8 +232,10 @@ export default async function playerRoutes(app) {
     return svc.payments.createDeposit(req.user, b);
   });
 
+  app.get('/wallet/instruments', { preHandler: requireUser }, async (req) => svc.payments.instruments(req.user.id));
   app.post('/wallet/withdraw', { preHandler: requireUser }, async (req) => {
-    const b = parse(z.object({ provider: z.string().max(40), method: z.string().max(40), amount: money }), req.body);
+    const b = parse(z.object({ provider: z.string().max(40), method: z.string().max(40), instrument: z.string().max(100), amount: money,
+      forfeitBonus: z.boolean().optional() }), req.body);
     return svc.payments.requestWithdrawal(req.user, b);
   });
   app.post('/wallet/withdraw/:id/cancel', { preHandler: requireUser }, async (req) => svc.payments.cancelWithdrawal(req.user.id, Number(req.params.id)));
@@ -174,10 +243,11 @@ export default async function playerRoutes(app) {
   /* ---------------- KYC ---------------- */
   app.post('/kyc/start', { preHandler: requireUser }, async (req) => {
     if (req.user.kyc_status === 'verified') return { status: 'verified' };
-    await pool.query(`UPDATE users SET kyc_status='pending' WHERE id=$1 AND kyc_status IN ('none','rejected')`, [req.user.id]);
+    if (!cfg.KYC_PROVIDER) fail('KYC_UNAVAILABLE', 'Онлайн-верификация подключается. Напишите в поддержку, чтобы пройти её вручную.', 503);
     await audit(null, { actorType: 'user', actorId: req.user.id, action: 'kyc_start', ip: req.ip });
-    // Production: return the KYC provider's hosted flow URL (Sumsub / Veriff / Onfido) here.
-    return { status: 'pending', message: 'Заявка на проверку отправлена. Обычно это занимает до 24 часов.' };
+    // Real provider (Sumsub / Veriff / Onfido): create an applicant and return its hosted flow URL here;
+    // the result arrives at /api/webhooks/kyc/:provider with an identityRef for duplicate detection.
+    return { status: req.user.kyc_status, url: cfg.KYC_PROVIDER === 'sandbox' ? '/kyc/sandbox' : null };
   });
 
   /* ---------------- provably fair ---------------- */
@@ -213,7 +283,8 @@ export default async function playerRoutes(app) {
   app.get('/sport/events', async () => svc.sport.list());
   app.post('/sport/bets', gameLimit, async req => {
     const b = parse(z.object({ kind: z.enum(['single', 'express']), stake: money,
-      selections: z.array(z.object({ eventId: z.number().int(), outcome: z.number().int(), odds: z.number() })).min(1).max(20) }), req.body);
+      selections: z.array(z.object({ eventId: z.number().int(), outcome: z.number().int(), odds: z.number() })).min(1).max(20),
+      acceptChanges: z.enum(['none', 'higher', 'any']).optional() }), req.body);
     return svc.sport.place(req.user.id, b);
   });
   app.get('/sport/bets', { preHandler: requireUser }, async req => svc.sport.myBets(req.user.id));

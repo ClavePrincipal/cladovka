@@ -25,7 +25,7 @@
 | Платежи: карты | эквайринг банка, Paysafe, Nuvei, Praxis Cashier (каскад из нескольких PSP) | `server/src/payments/providers.js` — добавить адаптер с `createDeposit`, `createPayout`, `verifyWebhook` |
 | Платежи: локальные | Kaspi, Halyk, P2P-агрегаторы (если разрешено в юрисдикции) | там же |
 | Криптовалюта | CoinsPaid, NOWPayments, Cryptoprocessing | там же |
-| KYC | Sumsub, Veriff, Onfido | `POST /api/kyc/start` возвращает URL провайдера; вебхук уже есть: `/api/webhooks/kyc/:provider` |
+| KYC | Sumsub, Veriff, Onfido | адаптер в `POST /api/kyc/start` возвращает URL провайдера; вебхук `/api/webhooks/kyc/:provider` уже есть и должен передавать `identityRef` (номер документа), по нему ищутся дубликаты и самоисключённые |
 | Слоты и live-казино | агрегатор: SoftSwiss, Slotegrator, EveryMatrix, BetConstruct (дают сотни игр, Evolution, Pragmatic по одному API) | новый модуль «remote games»: кошелёк сервиса уже готов (ставка/выигрыш через `ledger.post` с идемпотентностью) |
 | Линия и коэффициенты | Sportradar, Genius Sports, BetConstruct, OddsMatrix | заменить ручной ввод в «Линии» на импорт фида: `sport.create` / `sport.update` / `sport.settle`, поле `feed_ref` уже есть |
 | SMS / e-mail | Twilio, Mobizon (KZ), SendGrid | подтверждение телефона и e-mail, восстановление пароля |
@@ -52,6 +52,22 @@
 4. Cloudflare перед сайтом, `BLOCKED_COUNTRIES` для запрещённых стран, `ADMIN_IP_ALLOWLIST` для офиса/VPN.
 5. Алерты Prometheus → Telegram/Slack/PagerDuty дежурному.
 6. Пентест и сертификация ГСЧ (см. `docs/SECURITY.md`).
+
+## Параметры защиты (`.env`)
+
+| Параметр | По умолчанию | Что делает |
+|----------|--------------|------------|
+| `AUTO_APPROVE_WITHDRAWAL` | 200 000 ₸ | Выплаты до этой суммы верифицированным игрокам без алертов и старше 24 часов уходят автоматически |
+| `FOUR_EYES_WITHDRAWAL` | 2 000 000 ₸ | С этой суммы выплату одобряют два сотрудника |
+| `LIVE_BET_DELAY_MS` | 5000 | Задержка приёма live-ставок |
+| `SECURITY_HOLD_HOURS` | 24 | Пауза на вывод после смены пароля или 2FA |
+| `CASHBACK_PCT`, `CASHBACK_MAX` | 10%, 1 000 000 ₸ | Еженедельный кэшбэк |
+| `LOGIN_FAILS_PER_IP`, `LOGIN_FAILS_PER_ACCOUNT` | 5, 30 | Блокировка входа на 15 минут |
+| `KYC_PROVIDER` | sandbox в разработке | Провайдер верификации; без него онлайн-KYC недоступен |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | — | CAPTCHA на регистрации и входе |
+| `LICENSE_TEXT` | — | Текст лицензии в футере. Не заполняйте, пока лицензии нет |
+
+Суммы в `.env` указываются в тиынах (×100).
 
 ## Как запустить сейчас
 

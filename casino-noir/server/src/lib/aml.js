@@ -1,6 +1,8 @@
 // AML / fraud rules. Each rule writes an alert for the risk team; none of them moves money.
 import { metrics } from './metrics.js';
 
+export async function raise(c, userId, rule, severity, details) { return alert(c, userId, rule, severity, details); }
+
 async function alert(c, userId, rule, severity, details) {
   // One open alert per rule per user is enough; avoid flooding the queue.
   const dup = await c.query(`SELECT 1 FROM aml_alerts WHERE user_id=$1 AND rule=$2 AND status='open' LIMIT 1`, [userId, rule]);
@@ -30,4 +32,18 @@ export async function onWithdrawal(c, cfg, userId, amount, turnoverRatio) {
 export async function onBigWin(c, userId, game, bet, payout) {
   if (payout >= 1_000_000_00 || (bet > 0 && payout / bet >= 500))
     await alert(c, userId, 'big_win', 'low', { game, bet, payout, multiplier: +(payout / bet).toFixed(2) });
+}
+
+/** The same card / wallet / address used by more than one account: multi-accounting or a stolen instrument. */
+export async function onInstrument(c, userId, instrument) {
+  const r = await c.query(`SELECT DISTINCT user_id FROM payments WHERE instrument=$1 AND direction='deposit' AND status='succeeded' AND user_id<>$2 LIMIT 5`, [instrument, userId]);
+  if (r.rowCount) {
+    await alert(c, userId, 'shared_instrument', 'high', { instrument, otherUserIds: r.rows.map(x => x.user_id) });
+    for (const o of r.rows) await alert(c, o.user_id, 'shared_instrument', 'high', { instrument, otherUserIds: [userId] });
+  }
+}
+
+/** The same verified person (document) behind several accounts. */
+export async function onIdentity(c, userId, otherUserIds) {
+  if (otherUserIds.length) await alert(c, userId, 'duplicate_identity', 'high', { otherUserIds });
 }

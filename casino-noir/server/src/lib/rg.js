@@ -56,14 +56,15 @@ export async function assertCanPlay(c, user, stake) {
   }
 }
 
-export async function assertDepositAllowed(c, userId, amount) {
+export async function assertDepositAllowed(c, cfg, userId, amount) {
   const l = await getLimits(c, userId);
   if (l.self_excluded_until && l.self_excluded_until > new Date()) fail('SELF_EXCLUDED', 'Пополнение недоступно во время самоисключения', 403);
   const checks = [['deposit_daily', '1 day', 'дневной'], ['deposit_weekly', '7 days', 'недельный'], ['deposit_monthly', '30 days', 'месячный']];
   for (const [k, interval, name] of checks) {
     if (!l[k]) continue;
     const r = await c.query(`SELECT COALESCE(SUM(amount),0)::bigint AS s FROM payments
-      WHERE user_id = $1 AND direction = 'deposit' AND status IN ('created','pending','succeeded') AND created_at >= now() - $2::interval`, [userId, interval]);
+      WHERE user_id = $1 AND direction = 'deposit' AND created_at >= now() - $2::interval
+        AND (status = 'succeeded' OR (status IN ('created','pending') AND created_at > now() - make_interval(mins => $3)))`, [userId, interval, cfg.PENDING_DEPOSIT_TTL_MIN]);
     if (r.rows[0].s + amount > l[k]) fail('DEPOSIT_LIMIT', `Превышен ваш ${name} лимит депозита`, 403);
   }
 }

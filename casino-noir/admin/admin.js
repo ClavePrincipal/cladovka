@@ -26,11 +26,12 @@ const NAV = [
   ['aml', 'AML-алерты', ['admin', 'risk']], ['events', 'Линия'], ['audit', 'Аудит', ['admin']], ['staff', 'Сотрудники', ['admin']],
 ];
 const chip = (s, map) => { const [cls, txt] = map[s] || ['', s]; return `<span class="chip-st ${cls}">${esc(txt)}</span>`; };
-const PAY_ST = { created: ['wait', 'Создан'], pending: ['wait', 'Ожидает'], succeeded: ['ok', 'Зачислен'], failed: ['bad', 'Отклонён'], review: ['wait', 'На проверке'], approved: ['wait', 'Отправлен'], rejected: ['bad', 'Отклонён'], paid: ['ok', 'Выплачен'] };
+const PAY_ST = { expired: ['', 'Не оплачен'], chargeback: ['bad', 'Чарджбэк'], created: ['wait', 'Создан'], pending: ['wait', 'Ожидает'], succeeded: ['ok', 'Зачислен'], failed: ['bad', 'Отклонён'], review: ['wait', 'На проверке'], approved: ['wait', 'Отправлен'], rejected: ['bad', 'Отклонён'], paid: ['ok', 'Выплачен'] };
 const USER_ST = { active: ['ok', 'Активен'], blocked: ['bad', 'Заблокирован'], closed: ['bad', 'Закрыт'] };
 const KYC_ST = { none: ['', 'Нет'], pending: ['wait', 'На проверке'], verified: ['ok', 'Пройден'], rejected: ['bad', 'Отклонён'] };
 const SEV = { high: ['bad', 'Высокий'], medium: ['wait', 'Средний'], low: ['', 'Низкий'] };
-const RULES = { large_deposit: 'Крупный депозит', large_withdrawal: 'Крупный вывод', low_turnover_withdrawal: 'Вывод без оборота', rapid_deposits: 'Частые депозиты', multi_account_ip: 'Мультиаккаунт по IP', big_win: 'Крупный выигрыш' };
+const RULES = { shared_instrument: 'Одна карта на нескольких аккаунтах', bonus_instrument_reuse: 'Повторный бонус на ту же карту', chargeback: 'Чарджбэк (отзыв платежа)',
+  duplicate_identity: 'Один человек — несколько аккаунтов', self_excluded_duplicate: 'Новый аккаунт при самоисключении', large_deposit: 'Крупный депозит', large_withdrawal: 'Крупный вывод', low_turnover_withdrawal: 'Вывод без оборота', rapid_deposits: 'Частые депозиты', multi_account_ip: 'Мультиаккаунт по IP', big_win: 'Крупный выигрыш' };
 const GAME = { slot: 'Слоты', roulette: 'Рулетка', crash: 'Crash', dice: 'Dice', mines: 'Мины' };
 
 /* ---------- login ---------- */
@@ -85,7 +86,7 @@ async function dashboard() {
   $('#dash').outerHTML = `<div style="display:flex;flex-direction:column;gap:20px">
     ${d.ledgerOk ? '' : `<div class="note" style="border-color:var(--loss)"><b style="color:var(--loss)">Расхождение в балансах!</b> ${d.ledgerMismatches.length} счетов не совпадают с журналом операций. Сообщите разработчикам.</div>`}
     <div class="kpis">
-      ${k('NGR (чистый доход)', money(m.ngr), 'GGR минус бонусы', m.ngr >= 0 ? 'good' : 'warn')}
+      ${k('NGR (чистый доход)', money(m.ngr), 'GGR минус бонусы и кэшбэк', m.ngr >= 0 ? 'good' : 'warn')}
       ${k('GGR казино', money(m.ggr_casino), 'оборот ' + money(m.casino_stake))}
       ${k('GGR спорт', money(m.ggr_sport), 'оборот ' + money(m.sport_stake))}
       ${k('Депозиты', money(m.deposits))}
@@ -124,14 +125,17 @@ async function playerCard(id) {
     <div class="grid2"><div class="note" style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
       <span>E-mail</span><b>${esc(p.email || '—')}</b><span>Телефон</span><b>${esc(p.phone || '—')}</b><span>Дата рождения</span><b>${esc(p.birthDate || '—')}</b>
       <span>Статус</span><b>${chip(p.status, USER_ST)}</b><span>KYC</span><b>${chip(p.kycStatus, KYC_ST)}</b><span>Страна / IP</span><b>${esc(p.country || '—')} · ${esc(p.lastIp || p.regIp || '—')}</b>
-      <span>Регистрация</span><b>${dt(p.createdAt)}</b><span>Последний вход</span><b>${dt(p.lastLoginAt)}</b></div>
+      <span>Регистрация</span><b>${dt(p.createdAt)}</b><span>Последний вход</span><b>${dt(p.lastLoginAt)}</b>
+      <span>2FA</span><b>${p.totpEnabled ? 'включена' : 'нет'}</b><span>Лимит ставок на спорт</span><b>${p.stakeFactor >= 1 ? 'обычный' : p.stakeFactor > 0 ? '×' + p.stakeFactor : '<span class="neg">спорт закрыт</span>'}</b>
+      ${p.securityHoldUntil && new Date(p.securityHoldUntil) > new Date() ? `<span>Вывод заблокирован до</span><b>${dt(p.securityHoldUntil)}</b>` : ''}</div>
     <div class="kpis" style="grid-template-columns:1fr 1fr">
       <div class="kpi"><small>Баланс</small><b>${money(d.balances.cash)}</b><span>бонус ${money(d.balances.bonus)} · на выводе ${money(d.balances.withdraw_hold)}</span></div>
       <div class="kpi"><small>Доход с игрока</small><b class="${s.stake - s.payout >= 0 ? 'pos' : 'neg'}">${money(s.stake - s.payout)}</b><span>оборот ${money(s.stake)}</span></div>
       <div class="kpi"><small>Депозиты</small><b>${money(s.deposits)}</b></div><div class="kpi"><small>Выводы</small><b>${money(s.withdrawals)}</b></div></div></div>
     <div class="row-actions">
       ${can('admin', 'risk', 'support') ? `${p.status === 'active' ? `<button class="btn ghost sm" data-pstatus="blocked">Заблокировать</button>` : `<button class="btn ghost sm" data-pstatus="active">Разблокировать</button>`}
-        <button class="btn ghost sm" data-pkyc="verified">KYC: подтвердить</button><button class="btn ghost sm" data-pkyc="rejected">KYC: отклонить</button>` : ''}
+        ${can('admin', 'risk') ? '<button class="btn ghost sm" data-pkyc="verified">KYC: подтвердить</button>' : ''}<button class="btn ghost sm" data-pkyc="rejected">KYC: отклонить</button>` : ''}
+      ${can('admin', 'risk', 'trader') ? `<button class="btn ghost sm" data-pstake>Лимит ставок на спорт</button>` : ''}
       ${can('admin') ? `<button class="btn ghost sm" data-padjust>Корректировка баланса</button>` : ''}
     </div>
     <div class="tabs">${tabs.map(([k, t], i) => `<button type="button" data-ptab="${k}" class="${i ? '' : 'on'}">${t}</button>`).join('')}</div><div id="ptab"></div></div>`);
@@ -148,6 +152,13 @@ async function playerCard(id) {
   $$('[data-ptab]').forEach(b => b.onclick = () => { $$('[data-ptab]').forEach(x => x.classList.toggle('on', x === b)); $('#ptab').innerHTML = T[b.dataset.ptab](); });
   $$('[data-pstatus]').forEach(b => b.onclick = () => reasonDialog(b.textContent, async reason => { if (await safe(() => api('POST', `/players/${id}/status`, { status: b.dataset.pstatus, reason }))) { toast('Статус изменён', 'ok'); playerCard(id); } }));
   $$('[data-pkyc]').forEach(b => b.onclick = async () => { if (await safe(() => api('POST', `/players/${id}/kyc`, { status: b.dataset.pkyc }))) { toast('KYC обновлён', 'ok'); playerCard(id); } });
+  const sf = $('[data-pstake]'); if (sf) sf.onclick = () => {
+    openModal(mhead('Лимит ставок на спорт') + `<form class="d-body" id="sff"><p class="muted" style="margin:0">Для игроков-арбитражников и злоупотребляющих бонусами. 1 — без ограничений, 0,1 — максимальная ставка в 10 раз меньше, 0 — ставки на спорт закрыты.</p>
+      <div class="field"><label for="sfv">Коэффициент от 0 до 1</label><input class="inp" id="sfv" type="number" min="0" max="1" step="0.05" value="${Math.min(1, p.stakeFactor)}" required></div>
+      <div class="field"><label for="sfr">Причина (в журнал аудита)</label><input class="inp" id="sfr" required minlength="3" style="font-family:var(--font-ui)"></div>
+      <button class="btn gold block" type="submit">Сохранить</button></form>`);
+    $('#sff').onsubmit = async e => { e.preventDefault(); if (await safe(() => api('POST', `/players/${id}/stake-factor`, { factor: +$('#sfv').value, reason: $('#sfr').value }))) { toast('Лимит обновлён', 'ok'); playerCard(id); } };
+  };
   const adj = $('[data-padjust]'); if (adj) adj.onclick = () => {
     openModal(mhead('Корректировка баланса') + `<form class="d-body" id="af">
     <div class="field"><label for="aa">Сумма, ₸ (минус — списание)</label><input class="inp" id="aa" type="number" step="0.01" required></div>
@@ -164,10 +175,11 @@ function reasonDialog(title, done) {
 
 /* ---------- payments ---------- */
 async function withdrawals() {
-  main(`<div class="bo-head"><h1>Выплаты на проверке</h1></div><div class="note">Перед одобрением проверьте: пройден ли KYC, нет ли открытых AML-алертов, совпадает ли способ вывода со способом пополнения.</div><div class="panel" id="wl"><div class="empty">Загрузка…</div></div>`);
+  main(`<div class="bo-head"><h1>Выплаты на проверке</h1></div><div class="note">Небольшие выплаты чистым верифицированным игрокам уходят автоматически — здесь только те, что требуют решения. Крупные суммы одобряют два разных сотрудника. Вывод возможен только на карту пополнения, это проверяет система. Перед одобрением проверьте AML-алерты игрока.</div><div class="panel" id="wl"><div class="empty">Загрузка…</div></div>`);
   const rows = await safe(() => api('GET', '/payments?direction=withdrawal&status=review')); if (!rows) return;
   $('#wl').innerHTML = table([{ t: 'Создана', f: r => dt(r.created_at) }, { t: 'Игрок', f: r => `<a href="#" data-player="${r.user_id}" class="num" style="color:var(--gold)">${r.public_id}</a>` }, { t: 'KYC', f: r => chip(r.kyc_status, KYC_ST) },
-    { t: 'Способ', f: r => esc(r.provider + ' / ' + r.method) }, { t: 'Сумма', n: 1, f: r => money(r.amount) },
+    { t: 'Куда', f: r => `<span class="num">${esc(r.instrument || r.method)}</span>` }, { t: 'Сумма', n: 1, f: r => money(r.amount) },
+    { t: 'Одобрения', f: r => r.approvals?.length ? `<span class="chip-st wait">1 из 2</span>` : '' },
     { t: '', f: r => `<div class="row-actions"><button class="btn gold sm" data-wd="${r.id}" data-dec="approve">Одобрить</button><button class="btn ghost sm" data-wd="${r.id}" data-dec="reject">Отклонить</button></div>` }], rows);
 }
 async function payments() {
@@ -263,7 +275,7 @@ const VIEWS = { dashboard, players: () => players(), withdrawals, payments, aml,
 document.addEventListener('click', async e => {
   const pl = e.target.closest('[data-player]'); if (pl) { e.preventDefault(); playerCard(pl.dataset.player); return; }
   const wd = e.target.closest('[data-wd]');
-  if (wd) { const dec = wd.dataset.dec; reasonDialog(dec === 'approve' ? 'Одобрить вывод' : 'Отклонить вывод', async note => { if (await safe(() => api('POST', `/withdrawals/${wd.dataset.wd}/${dec}`, { note }))) { toast(dec === 'approve' ? 'Выплата отправлена провайдеру' : 'Вывод отклонён, деньги возвращены игроку', 'ok'); closeModal(); withdrawals(); } }); return; }
+  if (wd) { const dec = wd.dataset.dec; reasonDialog(dec === 'approve' ? 'Одобрить вывод' : 'Отклонить вывод', async note => { const r = await safe(() => api('POST', `/withdrawals/${wd.dataset.wd}/${dec}`, { note })); if (r) { toast(r.needsSecondApproval ? 'Одобрение записано. Крупная сумма: нужно одобрение второго сотрудника.' : dec === 'approve' ? 'Выплата отправлена провайдеру' : 'Вывод отклонён, деньги возвращены игроку', 'ok'); closeModal(); withdrawals(); } }); return; }
   const a = e.target.closest('[data-aml]');
   if (a) { reasonDialog('Закрыть алерт', async note => { if (await safe(() => api('POST', `/aml/${a.dataset.aml}/close`, { note }))) { toast('Алерт закрыт', 'ok'); closeModal(); aml(); } }); }
 });

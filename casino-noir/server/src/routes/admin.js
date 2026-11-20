@@ -66,7 +66,8 @@ export default async function adminRoutes(app) {
         COALESCE(SUM(amount)  FILTER (WHERE type='win' AND ref_type='round'),0)::bigint AS casino_payout,
         COALESCE(SUM(-amount) FILTER (WHERE type='bet' AND ref_type='sport_bet'),0)::bigint AS sport_stake,
         COALESCE(SUM(amount)  FILTER (WHERE type IN ('win','refund') AND ref_type='sport_bet'),0)::bigint AS sport_payout,
-        COALESCE(SUM(amount)  FILTER (WHERE type='bonus_release' AND account_kind='cash'),0)::bigint AS bonus_cost,
+        COALESCE(SUM(amount)  FILTER (WHERE type IN ('bonus_release','cashback') AND account_kind='cash'),0)::bigint AS bonus_cost,
+        COALESCE(SUM(-amount) FILTER (WHERE type='chargeback'),0)::bigint AS chargebacks_recovered,
         COALESCE(SUM(amount)  FILTER (WHERE type='deposit'),0)::bigint AS deposits,
         COALESCE(SUM(-amount) FILTER (WHERE type='withdrawal_paid'),0)::bigint AS withdrawals,
         COUNT(DISTINCT user_id) FILTER (WHERE type='bet') AS active_players
@@ -104,6 +105,7 @@ export default async function adminRoutes(app) {
     const email = pii.dec(u.email_enc), phone = pii.dec(u.phone_enc);
     return { id: u.id, publicId: u.public_id, email: canPii ? email : mask(email), phone: canPii ? phone : mask(phone),
       birthDate: canPii ? pii.dec(u.birth_date_enc) : null, currency: u.currency, country: u.country, status: u.status, kycStatus: u.kyc_status,
+      stakeFactor: u.stake_factor, totpEnabled: u.totp_enabled, securityHoldUntil: u.security_hold_until,
       regIp: canPii ? u.reg_ip : null, lastIp: canPii ? u.last_ip : null, lastLoginAt: u.last_login_at, createdAt: u.created_at };
   };
 
@@ -155,9 +157,20 @@ export default async function adminRoutes(app) {
 
   app.post('/players/:id/kyc', { preHandler: auth('admin', 'risk', 'support') }, async (req) => {
     const b = parse(z.object({ status: z.enum(['none', 'pending', 'verified', 'rejected']), note: z.string().max(500).optional() }), req.body);
+    // Manual verification unlocks withdrawals, so only the risk team (not first-line support) may grant it.
+    if (b.status === 'verified' && !['admin', 'risk'].includes(req.staff.role)) fail('FORBIDDEN', 'Подтвердить верификацию может только риск-отдел', 403);
     const id = Number(req.params.id);
     await pool.query('UPDATE users SET kyc_status=$2 WHERE id=$1', [id, b.status]);
     await log(req, 'player_kyc', 'user', id, b);
+    return { ok: true };
+  });
+
+  // Risk tool: limit (0 < f < 1) or disable (0) sports betting for arbitrage / sharp / bonus-abusing players.
+  app.post('/players/:id/stake-factor', { preHandler: auth('admin', 'risk', 'trader') }, async (req) => {
+    const b = parse(z.object({ factor: z.number().min(0).max(1), reason: z.string().min(3).max(500) }), req.body);
+    const id = Number(req.params.id);
+    await pool.query('UPDATE users SET stake_factor=$2 WHERE id=$1', [id, b.factor]);
+    await log(req, 'player_stake_factor', 'user', id, b);
     return { ok: true };
   });
 

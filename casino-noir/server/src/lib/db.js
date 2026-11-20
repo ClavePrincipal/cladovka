@@ -3,6 +3,7 @@ import pg from 'pg';
 // BIGINT -> JS number. Safe: balances stay far below 2^53 minor units (~90 trillion ₸).
 pg.types.setTypeParser(20, v => Number(v));
 pg.types.setTypeParser(1700, v => Number(v)); // NUMERIC
+pg.types.setTypeParser(1016, v => pg.types.arrayParser.create(v, Number).parse()); // BIGINT[]
 
 export function createPool(cfg) {
   return new pg.Pool({ connectionString: cfg.DATABASE_URL, max: cfg.DB_POOL_MAX, statement_timeout: 10_000 });

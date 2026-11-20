@@ -27,9 +27,11 @@ test('registration: one-click returns credentials, rejects minors, login works, 
   const ok = await c2.post('/api/auth/login', { login: r.body.credentials.id, password: r.body.credentials.password });
   assert.equal(ok.status, 200);
 
-  const c3 = client(app);
-  for (let i = 0; i < 5; i++) assert.equal((await c3.post('/api/auth/login', { login: r.body.credentials.id, password: 'wrong' })).status, 401);
-  assert.equal((await c3.post('/api/auth/login', { login: r.body.credentials.id, password: r.body.credentials.password })).status, 429);
+  const attacker = client(app);
+  for (let i = 0; i < 5; i++) assert.equal((await attacker.post('/api/auth/login', { login: r.body.credentials.id, password: 'wrong' })).status, 401);
+  assert.equal((await attacker.post('/api/auth/login', { login: r.body.credentials.id, password: r.body.credentials.password })).status, 429);
+  // The owner, from another network, is not locked out by the attacker (no lockout-DoS).
+  assert.equal((await client(app).post('/api/auth/login', { login: r.body.credentials.id, password: r.body.credentials.password })).status, 200);
 });
 
 test('email registration stores PII encrypted and searchable only by HMAC', async () => {
@@ -175,8 +177,8 @@ test('responsible gaming: limit decreases apply now, increases wait 24h; self-ex
 });
 
 test('withdrawals: KYC + turnover required, hold → finance approval → paid; viewer cannot approve', async () => {
-  const c = client(app); const reg = await register(c); await deposit(c, 1_000_000);
-  const w = { provider: 'sandbox', method: 'card', amount: 300_000 };
+  const c = client(app); const reg = await register(c); await deposit(c, 1_000_000, false, '5555');
+  const w = { provider: 'sandbox', method: 'card', instrument: 'card:••5555', amount: 300_000 };
   assert.equal((await c.post('/api/wallet/withdraw', w)).body.error, 'KYC_REQUIRED');
   await pool.query(`UPDATE users SET kyc_status='verified' WHERE public_id=$1`, [reg.body.user.id]);
   assert.equal((await c.post('/api/wallet/withdraw', w)).body.error, 'TURNOVER');
