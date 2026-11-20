@@ -1,0 +1,138 @@
+{
+ "title": "NOIR — операции",
+ "uid": "noir-ops",
+ "schemaVersion": 39,
+ "time": {
+  "from": "now-24h",
+  "to": "now"
+ },
+ "refresh": "30s",
+ "panels": [
+  {
+   "type": "timeseries",
+   "title": "Ставки в минуту",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (product) (rate(noir_bets_total[5m]))*60",
+     "legendFormat": "{{product}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "GGR в час, ₸",
+   "gridPos": {
+    "x": 12,
+    "y": 0,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    }
+   },
+   "targets": [
+    {
+     "expr": "(sum by (product) (rate(noir_stake_minor_total[1h])) - sum by (product) (rate(noir_payout_minor_total[1h])))*36",
+     "legendFormat": "{{product}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Депозиты в час, ₸",
+   "gridPos": {
+    "x": 0,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (provider) (rate(noir_deposits_minor_total[1h]))*36",
+     "legendFormat": "{{provider}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Входы в минуту",
+   "gridPos": {
+    "x": 12,
+    "y": 8,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (kind, result) (rate(noir_logins_total[5m]))*60",
+     "legendFormat": "{{kind}} {{result}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "Задержка p95",
+   "gridPos": {
+    "x": 0,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s"
+    }
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.95, sum by (le, route) (rate(noir_http_request_duration_seconds_bucket[5m])))",
+     "legendFormat": "{{route}}"
+    }
+   ]
+  },
+  {
+   "type": "timeseries",
+   "title": "AML-алерты за час",
+   "gridPos": {
+    "x": 12,
+    "y": 16,
+    "w": 12,
+    "h": 8
+   },
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short"
+    }
+   },
+   "targets": [
+    {
+     "expr": "sum by (rule) (increase(noir_aml_alerts_total[1h]))",
+     "legendFormat": "{{rule}}"
+    }
+   ]
+  }
+ ]
+}

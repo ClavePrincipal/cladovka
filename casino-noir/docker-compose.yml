@@ -1,0 +1,70 @@
+# Full stack: TLS proxy → app (2 replicas) → PostgreSQL, plus Prometheus + Grafana monitoring and daily DB backups.
+# Usage: cp .env.example .env, fill in every secret, then: docker compose up -d
+#        docker compose exec app npm run create-staff -- you@company.kz "Your Name" admin
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: noir
+      POSTGRES_USER: noir
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes: [db-data:/var/lib/postgresql/data]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U noir"], interval: 5s, retries: 10 }
+    networks: [backend]            # internal network: not reachable from the internet
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://noir:${DB_PASSWORD}@db:5432/noir
+      TRUST_PROXY: "true"
+    depends_on: { db: { condition: service_healthy } }
+    deploy: { replicas: 2 }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: [ALL]
+    networks: [backend, edge]
+
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment: { DOMAIN: "${DOMAIN:?set DOMAIN in .env}" }
+    volumes: [./deploy/Caddyfile:/etc/caddy/Caddyfile:ro, caddy-data:/data]
+    depends_on: [app]
+    networks: [edge]
+
+  backup:
+    image: postgres:16
+    restart: unless-stopped
+    environment: { PGPASSWORD: "${DB_PASSWORD}" }
+    volumes: [./backups:/backups, ./deploy/backup.sh:/backup.sh:ro]
+    entrypoint: ["sh", "/backup.sh"]
+    depends_on: { db: { condition: service_healthy } }
+    networks: [backend]
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: unless-stopped
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=90d"]
+    volumes: [./deploy/prometheus:/etc/prometheus:ro, prom-data:/prometheus]
+    networks: [backend]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    restart: unless-stopped
+    ports: ["127.0.0.1:3000:3000"]   # open only through an SSH tunnel or VPN
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?set GRAFANA_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [backend, edge]
+
+volumes: { db-data: {}, caddy-data: {}, prom-data: {}, grafana-data: {} }
+networks: { backend: { internal: true }, edge: {} }

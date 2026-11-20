@@ -1,0 +1,28 @@
+groups:
+  - name: noir
+    rules:
+      - alert: AppDown
+        expr: up{job="noir"} == 0
+        for: 1m
+        labels: { severity: critical }
+      - alert: HighErrorRate
+        expr: rate(noir_errors_total[5m]) > 0.1
+        for: 5m
+        labels: { severity: critical }
+      - alert: PlayerLoginBruteForce
+        expr: sum(rate(noir_logins_total{kind="player",result="fail"}[5m])) > 2
+        for: 5m
+        labels: { severity: warning }
+      - alert: StaffLoginFailures
+        expr: increase(noir_logins_total{kind="staff",result="fail"}[15m]) > 5
+        labels: { severity: critical }
+      - alert: SlowRequests
+        expr: histogram_quantile(0.95, sum by (le) (rate(noir_http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: { severity: warning }
+      - alert: CasinoPaidMoreThanTook24h
+        expr: sum(increase(noir_payout_minor_total[24h])) > sum(increase(noir_stake_minor_total[24h])) * 1.05
+        labels: { severity: warning }
+      - alert: HighRiskAml
+        expr: increase(noir_aml_alerts_total{rule=~"large_withdrawal|multi_account_ip"}[1h]) > 0
+        labels: { severity: warning }

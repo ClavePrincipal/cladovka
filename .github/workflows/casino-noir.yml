@@ -1,0 +1,22 @@
+name: casino-noir
+on:
+  push: { paths: ['casino-noir/**', '.github/workflows/casino-noir.yml'] }
+  pull_request: { paths: ['casino-noir/**'] }
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env: { POSTGRES_USER: noir, POSTGRES_PASSWORD: noir_dev_pw, POSTGRES_DB: noir_test }
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-retries 10
+    defaults: { run: { working-directory: casino-noir/server } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: casino-noir/server/package-lock.json }
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=high
+      - run: npm test
+        env: { TEST_DATABASE_URL: postgres://noir:noir_dev_pw@localhost:5432/noir_test }

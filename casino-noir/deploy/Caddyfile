@@ -1,0 +1,15 @@
+# Automatic HTTPS (Let's Encrypt). Put a CDN/WAF (e.g. Cloudflare) in front for DDoS protection
+# and the CF-IPCountry header used for geo-blocking.
+{$DOMAIN} {
+	encode zstd gzip
+	@metrics path /metrics
+	respond @metrics 404
+	reverse_proxy app:8080 {
+		lb_policy least_conn
+		health_uri /ready
+	}
+	log {
+		output stdout
+		format json
+	}
+}

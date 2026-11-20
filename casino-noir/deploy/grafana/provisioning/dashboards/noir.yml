@@ -1,0 +1,3 @@
+apiVersion: 1
+providers:
+  - { name: noir, folder: NOIR, type: file, options: { path: /var/lib/grafana/dashboards } }

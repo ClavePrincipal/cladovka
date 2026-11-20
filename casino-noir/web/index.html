@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>NOIR Casino</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,500;0,6..96,700;1,6..96,500&family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap top-row">
+    <a class="logo" href="#home" aria-label="NOIR — на главную">NOIR<i>casino</i></a>
+    <nav class="nav" id="nav">
+      <a href="#sport" data-v="sport">Спорт</a>
+      <a href="#live" data-v="live"><span class="live-dot"></span>Live</a>
+      <a href="#casino" data-v="casino">Казино</a>
+      <a href="#livecasino" data-v="livecasino">Live-казино</a>
+      <a href="#fast" data-v="fast">Быстрые игры</a>
+      <a href="#promo" data-v="promo">Акции</a>
+    </nav>
+    <div class="acct" id="acct"></div>
+  </div>
+  <div class="demo-band">
+    <div class="wrap">
+      <span id="mode-note"><b>Демо-режим.</b> Все деньги виртуальные, реальные платежи не проводятся.</span>
+      <button type="button" data-act="fair">Проверка честности (Provably Fair)</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <!-- HOME -->
+  <section class="view" id="v-home">
+    <div class="hero">
+      <div class="hero-copy">
+        <span class="eyebrow">Приветственный пакет</span>
+        <h1>+100% к первому депозиту <em>до&nbsp;300&nbsp;000&nbsp;₸</em></h1>
+        <p>Спорт, слоты, рулетка и crash-игры в одном аккаунте. Мы показываем RTP каждой игры и маржу каждой линии, а любой исход можно проверить по хэшу.</p>
+        <div class="hero-cta">
+          <button class="btn gold big" type="button" data-act="register">Получить бонус</button>
+          <a class="btn ghost big" href="#casino">Открыть казино</a>
+        </div>
+        <span class="hero-terms">Вейджер ×30 за 30 дней. Минимальный депозит 2 000 ₸. 18+</span>
+      </div>
+      <div class="hero-art" aria-hidden="true">
+        <div class="chipstack">
+          <div class="chip c2"><span></span></div>
+          <div class="chip c3"><span></span></div>
+          <div class="chip"><span>N</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="cats">
+      <a class="cat" href="#sport"><span class="g">⚽︎</span><b>Спорт</b><small>1 200+ событий в день</small></a>
+      <a class="cat" href="#live"><span class="g">◉</span><b>Live</b><small>Коэффициенты в реальном времени</small></a>
+      <a class="cat" href="#casino"><span class="g">7</span><b>Слоты</b><small>RTP 95%</small></a>
+      <a class="cat" href="#livecasino"><span class="g">♠</span><b>Live-казино</b><small>Живые дилеры</small></a>
+      <a class="cat" href="#fast"><span class="g">↗</span><b>Crash и Dice</b><small>RTP до 98%</small></a>
+      <a class="cat" href="#promo"><span class="g">%</span><b>Кэшбэк</b><small>До 10% каждую неделю</small></a>
+    </div>
+
+    <div>
+      <div class="sec-head"><h2 class="sec">Сейчас в Live</h2><a href="#live">Все live-события →</a></div>
+      <div id="home-live"></div>
+    </div>
+
+    <div>
+      <div class="sec-head"><h2 class="sec">Популярные игры</h2><a href="#casino">Всё казино →</a></div>
+      <div class="games" id="home-games"></div>
+    </div>
+
+    <div>
+      <div class="sec-head"><h2 class="sec">Чем NOIR отличается</h2></div>
+      <div class="why">
+        <div><span class="k">RTP</span><b>Процент возврата на карточке игры</b><p>Видно до запуска: слоты 95%, рулетка 97,3%, Dice 98%.</p></div>
+        <div><span class="k">5–8%</span><b>Маржа линии показана открыто</b><p>Топ-лиги 5%, Live 7%, остальные лиги 8%. Указана над линией.</p></div>
+        <div><span class="k">SHA-256</span><b>Каждый исход проверяем</b><p>Хэш серверного сида публикуется до ставки, сид раскрывается после.</p></div>
+        <div><span class="k">Лимиты</span><b>Контроль в два клика</b><p>Лимит депозита, напоминание о времени, самоисключение.</p></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec-head"><h2 class="sec">Пополнение и вывод</h2><button class="btn ghost" type="button" data-act="deposit">Пополнить счёт</button></div>
+      <div class="paystrip" id="paystrip"></div>
+    </div>
+  </section>
+
+  <!-- SPORT / LIVE -->
+  <section class="view" id="v-sport" hidden>
+    <div class="book">
+      <aside class="side" id="sports-side"></aside>
+      <div class="events">
+        <div class="ev-tabs">
+          <div class="pills" id="line-tabs">
+            <button class="pill" type="button" data-line="all">Все</button>
+            <button class="pill" type="button" data-line="live">Live</button>
+            <button class="pill" type="button" data-line="pre">Линия</button>
+          </div>
+          <span class="margin-note" style="margin-left:auto">Маржа: топ-лиги <b>5%</b> · Live <b>7%</b> · прочие <b>8%</b></span>
+        </div>
+        <div id="events"></div>
+      </div>
+      <aside class="slip" id="slip">
+        <div class="slip-tabs">
+          <button type="button" class="on" data-slip="coupon">Купон <span id="slip-n" class="num"></span></button>
+          <button type="button" data-slip="mine">Мои ставки</button>
+        </div>
+        <div class="slip-body" id="slip-body"></div>
+      </aside>
+      <button class="btn gold slip-fab" type="button" id="slip-fab">Купон · <span class="num" id="fab-n">0</span></button>
+    </div>
+  </section>
+
+  <!-- CASINO (casino / livecasino / fast) -->
+  <section class="view" id="v-casino" hidden>
+    <div>
+      <div class="sec-head"><h2 class="sec" id="casino-title">Казино</h2></div>
+      <div class="casino-bar">
+        <div class="pills" id="cfilter">
+          <button class="pill" type="button" data-f="all">Все</button>
+          <button class="pill" type="button" data-f="slots">Слоты</button>
+          <button class="pill" type="button" data-f="table">Рулетка</button>
+          <button class="pill" type="button" data-f="fast">Crash / Dice / Мины</button>
+          <button class="pill" type="button" data-f="live">Live-дилеры</button>
+          <button class="pill" type="button" data-f="new">Новинки</button>
+        </div>
+        <input class="search" id="gsearch" type="search" placeholder="Поиск игры или провайдера">
+      </div>
+    </div>
+    <div class="games" id="casino-games"></div>
+  </section>
+
+  <!-- PROMO -->
+  <section class="view" id="v-promo" hidden>
+    <div class="sec-head"><h2 class="sec">Акции и бонусы</h2></div>
+    <div class="promos">
+      <div class="promo feat">
+        <span class="eyebrow">Для новых игроков</span>
+        <span class="pv">100%</span>
+        <h3>Бонус на первый депозит до 300 000 ₸</h3>
+        <p>Удваиваем первое пополнение. Бонус можно отыграть в спорте или в казино, вы выбираете при регистрации.</p>
+        <ul><li>Минимальный депозит: 2 000 ₸</li><li>Вейджер ×30 в казино или экспрессами от 3 событий с коэффициентом от 1,40</li><li>Срок отыгрыша: 30 дней</li></ul>
+        <button class="btn gold" type="button" data-act="register">Зарегистрироваться</button>
+      </div>
+      <div class="promo">
+        <span class="eyebrow">Каждый понедельник</span>
+        <span class="pv">10%</span>
+        <h3>Кэшбэк без вейджера</h3>
+        <p>Возвращаем до 10% от чистого проигрыша за неделю. Деньги приходят на основной счёт, их можно сразу вывести.</p>
+        <button class="btn ghost" type="button" data-go="casino">Играть</button>
+      </div>
+      <div class="promo">
+        <span class="eyebrow">Ежедневно</span>
+        <span class="pv">+10%</span>
+        <h3>Экспресс дня</h3>
+        <p>Соберите экспресс из 4+ событий, и коэффициент вырастет на 10%. В купоне бонус считается автоматически.</p>
+        <button class="btn ghost" type="button" data-go="sport">К линии</button>
+      </div>
+      <div class="promo">
+        <span class="eyebrow">Турнир</span>
+        <span class="pv">5 млн ₸</span>
+        <h3>Ночная лига слотов</h3>
+        <p>Очки за каждый выигрыш с множителем от ×10. Призовой фонд делят 100 лучших игроков недели.</p>
+        <button class="btn ghost" type="button" data-go="casino">К слотам</button>
+      </div>
+      <div class="promo">
+        <span class="eyebrow">Страховка</span>
+        <span class="pv">100%</span>
+        <h3>Страховка ставки</h3>
+        <p>Застрахуйте часть экспресса до начала последнего события. Стоимость страховки видна в купоне.</p>
+        <button class="btn ghost" type="button" data-go="sport">Сделать ставку</button>
+      </div>
+      <div class="promo">
+        <span class="eyebrow">Партнёрам</span>
+        <span class="pv">25%</span>
+        <h3>Приведи друга</h3>
+        <p>Получайте 25% от дохода площадки с игроков, которых вы пригласили, в течение года.</p>
+        <button class="btn ghost" type="button" data-act="account">Моя ссылка</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <span class="logo">NOIR<i>casino</i></span>
+      <p style="margin:0;max-width:42ch" id="footer-note">Демонстрационный прототип. Для работы с реальными деньгами нужна игровая лицензия юрисдикции, где работает сервис, KYC/AML-процедуры и сертифицированный ГСЧ.</p>
+      <div style="display:flex;gap:10px;align-items:center"><span class="age">18+</span><span>Играйте ответственно.</span></div>
+    </div>
+    <div><h4>Игры</h4><ul><li><a href="#sport">Ставки на спорт</a></li><li><a href="#live">Live</a></li><li><a href="#casino">Слоты</a></li><li><a href="#fast">Быстрые игры</a></li></ul></div>
+    <div><h4>Аккаунт</h4><ul><li><button type="button" data-act="deposit">Пополнить</button></li><li><button type="button" data-act="withdraw">Вывести</button></li><li><button type="button" data-act="account">Профиль и лимиты</button></li></ul></div>
+    <div><h4>Доверие</h4><ul><li><button type="button" data-act="fair">Provably Fair</button></li><li><button type="button" data-act="limits">Ответственная игра</button></li><li><a href="#promo">Правила бонусов</a></li></ul></div>
+  </div>
+</footer>
+
+<nav class="mnav" id="mnav">
+  <a href="#home" data-v="home"><span class="g">N</span>Главная</a>
+  <a href="#sport" data-v="sport"><span class="g">⚽︎</span>Спорт</a>
+  <a href="#casino" data-v="casino"><span class="g">7</span>Казино</a>
+  <a href="#fast" data-v="fast"><span class="g">↗</span>Crash</a>
+  <button type="button" data-act="account"><span class="g">◎</span>Профиль</button>
+</nav>
+
+<div class="modal" id="modal" hidden><div class="dialog" id="dialog" role="dialog" aria-modal="true"></div></div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="app.js" defer></script>
+</body>
+</html>

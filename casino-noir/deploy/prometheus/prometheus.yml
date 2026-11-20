@@ -1,0 +1,7 @@
+global: { scrape_interval: 15s }
+rule_files: [alerts.yml]
+scrape_configs:
+  - job_name: noir
+    # Put the METRICS_TOKEN value into deploy/prometheus/metrics_token (file is git-ignored).
+    authorization: { credentials_file: /etc/prometheus/metrics_token }
+    dns_sd_configs: [{ names: [app], type: A, port: 8080 }]
