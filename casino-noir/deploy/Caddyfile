@@ -8,7 +8,10 @@
 	respond @metrics 404
 	reverse_proxy app:8080 {
 		lb_policy least_conn
+		# During start-up and rolling restarts, wait for a healthy app instead of answering 503.
+		lb_try_duration 15s
 		health_uri /ready
+		health_interval 5s
 	}
 	log {
 		output stdout
