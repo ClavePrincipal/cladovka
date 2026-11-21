@@ -3,6 +3,7 @@ import { createPool, tx } from './lib/db.js';
 import { buildApp } from './app.js';
 import { migrate } from './scripts/migrate.js';
 import { expireDue, payCashback } from './lib/bonus.js';
+import { demoFeedTick } from './lib/demo-feed.js';
 
 const cfg = loadConfig();
 const pool = createPool(cfg);
@@ -29,6 +30,9 @@ job('session-cleanup', 7003, 60 * 60_000, async () => {
 });
 job('expire-pending-deposits', 7004, 5 * 60_000, () => app.ctx.svc.payments.expirePending());
 job('weekly-cashback', 7005, 60 * 60_000, () => tx(pool, c => payCashback(c, cfg))); // idempotent per user+week
+// Test stands only: a simulated odds feed keeps the demo line alive and settles bets.
+if (cfg.NODE_ENV !== 'production' && process.env.DEMO_FEED !== 'false')
+  job('demo-feed', 7006, 60_000, () => demoFeedTick({ pool, sport: app.ctx.svc.sport }));
 
 const shutdown = async sig => { app.log.info(`${sig}: shutting down`); await app.close(); await pool.end(); process.exit(0); };
 process.on('SIGTERM', shutdown); process.on('SIGINT', shutdown);

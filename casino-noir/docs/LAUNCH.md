@@ -81,12 +81,13 @@ npm start                  # сайт: http://localhost:8080, бэк-офис: h
 npm test                   # нужна БД noir_test
 ```
 
-**На сервере (Docker)**
+**Тестовый стенд на сервере** — одна команда, пошагово в `docs/VPS.md`:
 ```bash
-cp .env.example .env       # заполнить: DOMAIN, DB_PASSWORD, GRAFANA_PASSWORD и все секреты (openssl rand -hex 32)
-echo -n "$METRICS_TOKEN" > deploy/prometheus/metrics_token
-docker compose up -d
-docker compose exec app npm run create-staff -- you@company.kz "Ваше Имя" admin
-docker compose exec app npm run seed      # демо-линия, только для стенда
+bash deploy/install.sh test.ваш-домен.kz you@company.kz
 ```
-Тестовый стенд с песочницей платежей: `NODE_ENV=development` и `COOKIE_SECURE=true`. В `NODE_ENV=production` песочница отключена автоматически, пока вы не подключите реального провайдера.
+Скрипт проверен на полном Docker-стеке: HTTPS-прокси, два экземпляра приложения, база, бэкапы, Prometheus, Grafana.
+В тестовом режиме (`NODE_ENV=development`) работают песочницы оплаты и KYC и демо-фид матчей.
+
+**Рабочий запуск** — тот же `docker-compose.yml`, но `.env` заполняется вручную: `NODE_ENV=production`, реальные `PAYMENT_PROVIDERS` и `KYC_PROVIDER`, `ROBOTS_TAG=all`.
+В `NODE_ENV=production` песочницы и демо-фид отключены автоматически. Администратор создаётся командой
+`docker compose exec app node src/scripts/create-staff.js you@company.kz "Ваше Имя" admin`.

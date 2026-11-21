@@ -2,6 +2,8 @@
 # and the CF-IPCountry header used for geo-blocking.
 {$DOMAIN} {
 	encode zstd gzip
+	# Test stands stay out of search engines; set ROBOTS_TAG=all in .env for the public launch.
+	header X-Robots-Tag "{$ROBOTS_TAG}"
 	@metrics path /metrics
 	respond @metrics 404
 	reverse_proxy app:8080 {

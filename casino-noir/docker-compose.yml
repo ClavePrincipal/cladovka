@@ -32,7 +32,7 @@ services:
     image: caddy:2
     restart: unless-stopped
     ports: ["80:80", "443:443"]
-    environment: { DOMAIN: "${DOMAIN:?set DOMAIN in .env}" }
+    environment: { DOMAIN: "${DOMAIN:?set DOMAIN in .env}", ROBOTS_TAG: "${ROBOTS_TAG:-noindex, nofollow}" }
     volumes: [./deploy/Caddyfile:/etc/caddy/Caddyfile:ro, caddy-data:/data]
     depends_on: [app]
     networks: [edge]
@@ -50,6 +50,7 @@ services:
     image: prom/prometheus:v2.53.0
     restart: unless-stopped
     command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=90d"]
+    depends_on: [app]
     volumes: [./deploy/prometheus:/etc/prometheus:ro, prom-data:/prometheus]
     networks: [backend]
 
