@@ -66,6 +66,9 @@ mkdir -p backups
 
 say "Собираю и запускаю (первый запуск занимает несколько минут)"
 docker compose up -d --build
+# Config files are bind-mounted: running containers do not notice changes after 'git pull', so reload them.
+docker compose exec -T proxy caddy reload --config /etc/caddy/Caddyfile >/dev/null 2>&1 || docker compose restart proxy
+docker compose kill -s HUP prometheus >/dev/null 2>&1 || true
 
 say "Жду, пока приложение запустится"
 ok=""
