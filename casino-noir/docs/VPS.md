@@ -28,8 +28,8 @@ ssh root@IP-адрес-сервера
 **3. Установите сайт** — три команды:
 ```bash
 apt-get update && apt-get install -y git
-git clone -b claude/casino-website-design-nzo80n https://github.com/ClavePrincipal/my_internship_tasks.git
-cd my_internship_tasks/casino-noir && bash deploy/install.sh test.ваш-домен.kz ваш@email.com
+git clone -b claude/casino-website-design-nzo80n https://github.com/ClavePrincipal/cladovka.git
+cd cladovka/casino-noir && bash deploy/install.sh test.ваш-домен.kz ваш@email.com
 ```
 Скрипт сам установит Docker, настроит файрвол, сгенерирует секреты, запустит сайт с HTTPS, добавит демо-линию матчей и создаст администратора.
 Первый запуск занимает 3–5 минут.
@@ -43,7 +43,7 @@ cd my_internship_tasks/casino-noir && bash deploy/install.sh test.ваш-дом�
 
 Матчи в линии идут сами: начинаются по расписанию, завершаются примерно через 1 ч 45 мин, ставки рассчитываются, вместо сыгранных появляются новые.
 
-## Полезные команды (в папке `my_internship_tasks/casino-noir`)
+## Полезные команды (в папке `cladovka/casino-noir`)
 
 | Что сделать | Команда |
 |-------------|---------|

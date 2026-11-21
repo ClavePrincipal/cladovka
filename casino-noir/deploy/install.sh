@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # NOIR test stand: one-command install on a fresh Ubuntu / Debian VPS.
 #
-#   git clone -b claude/casino-website-design-nzo80n https://github.com/ClavePrincipal/my_internship_tasks.git
-#   cd my_internship_tasks/casino-noir
+#   git clone -b claude/casino-website-design-nzo80n https://github.com/ClavePrincipal/cladovka.git
+#   cd cladovka/casino-noir
 #   sudo bash deploy/install.sh <domain> <admin-email>
 #
 # Runs in test mode (NODE_ENV=development): sandbox payments and sandbox KYC, no real money.
