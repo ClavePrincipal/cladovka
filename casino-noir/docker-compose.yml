@@ -33,7 +33,7 @@ services:
     restart: unless-stopped
     ports: ["80:80", "443:443"]
     environment: { DOMAIN: "${DOMAIN:?set DOMAIN in .env}", ROBOTS_TAG: "${ROBOTS_TAG:-noindex, nofollow}" }
-    volumes: [./deploy/Caddyfile:/etc/caddy/Caddyfile:ro, caddy-data:/data]
+    volumes: [./deploy/caddy:/etc/caddy:ro, caddy-data:/data]   # a directory, so 'git pull' changes are visible
     depends_on: [app]
     networks: [edge]
 
@@ -41,8 +41,8 @@ services:
     image: postgres:16
     restart: unless-stopped
     environment: { PGPASSWORD: "${DB_PASSWORD}" }
-    volumes: [./backups:/backups, ./deploy/backup.sh:/backup.sh:ro]
-    entrypoint: ["sh", "/backup.sh"]
+    volumes: [./backups:/backups, ./deploy:/deploy:ro]
+    entrypoint: ["sh", "/deploy/backup.sh"]
     depends_on: { db: { condition: service_healthy } }
     networks: [backend]
 
