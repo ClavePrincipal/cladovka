@@ -231,6 +231,18 @@ def check_data(products, sales):
         print("  ВНИМАНИЕ: в данных есть отрицательные продажи или остатки. Проверьте выгрузку.")
 
 
+def split_by_product(sales):
+    """
+    Раскладывает продажи по товарам: {артикул: строки этого товара}.
+
+    Это как заранее разложить чеки по папкам: потом не нужно каждый раз
+    перебирать всю стопку. Если искать строки товара в общей таблице
+    (sales[sales["sku"] == артикул]), pandas для каждого товара просматривает
+    ВСЕ строки. На 1000 товаров за год это 365 000 строк × 1000 раз.
+    """
+    return {sku: rows for sku, rows in sales.groupby("sku")}
+
+
 # ==========================================================================
 # ШАГ 2. Прогноз спроса
 # ==========================================================================
@@ -255,18 +267,23 @@ def make_history(product_sales):
     return product_sales["sold"].where(product_sales["stock"] > 0)
 
 
-def forecast_daily_demand(history):
+def forecast_daily_demand(history, history_days=HISTORY_DAYS):
     """
     ПРОГНОЗ: сколько штук в день будет продаваться в ближайшее время.
 
-    Метод самый простой и понятный: среднее за последние HISTORY_DAYS дней,
+    Метод самый простой и понятный: среднее за последние history_days дней,
     когда товар был в наличии. Плюсы: легко объяснить клиенту, трудно сломать,
     редко ошибается «катастрофически». Минус: если продажи быстро растут или
     падают, среднее отстаёт от реальности (это видно в check_accuracy.py).
 
     Это ЕДИНСТВЕННОЕ место, где живёт модель. Хотите прогноз точнее —
-    меняйте только эту функцию, запускайте check_accuracy.py и смотрите,
-    стала ли ошибка меньше. Остальной код трогать не нужно.
+    сначала сравните варианты в check_rolling.py, а победителя перенесите сюда.
+    Остальной код трогать не нужно.
+
+    history_days=HISTORY_DAYS — «параметр по умолчанию». Если вызвать
+    forecast_daily_demand(history), возьмётся значение из настроек (28).
+    А check_rolling.py вызывает forecast_daily_demand(history, history_days=14),
+    чтобы сравнить разные окна, не меняя настройки.
 
     Возвращает три числа:
       daily_mean — прогноз: сколько штук в день
@@ -274,7 +291,7 @@ def forecast_daily_demand(history):
       n_days     — по скольким дням посчитано (мало дней = прогноз ненадёжный)
     """
     # dropna() выкидывает дни без товара, tail(28) берёт 28 последних из оставшихся.
-    known_days = history.dropna().tail(HISTORY_DAYS)
+    known_days = history.dropna().tail(history_days)
     n_days = len(known_days)
 
     if n_days == 0:
@@ -582,10 +599,12 @@ def main():
 
     # Идём по товарам по одному. Цикл медленнее «продвинутых» приёмов pandas,
     # зато его легко читать и отлаживать, а для тысяч товаров скорости хватает.
+    sales_by_sku = split_by_product(sales)
+    no_sales = sales.iloc[:0]   # пустая таблица с теми же колонками — для товаров без продаж
     purchase_rows = []
     profit_rows = []
     for _, product in products.iterrows():
-        product_sales = sales[sales["sku"] == product["sku"]]   # строки только этого товара
+        product_sales = sales_by_sku.get(product["sku"], no_sales)   # строки только этого товара
         purchase_rows.append(plan_purchase(product, product_sales, today))
         profit_rows.append(calc_profit(product, product_sales))
 

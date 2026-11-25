@@ -30,6 +30,10 @@
 (см. forecast.py). Остальная история понадобится, когда вы добавите тренд
 или сезонность.
 
+Одна проверка — это одна случайная точка. Чтобы сравнивать варианты прогноза
+между собой, используйте check_rolling.py: он повторяет такую же проверку
+для нескольких дат отреза.
+
 Запуск:
     python check_accuracy.py
 """
@@ -39,7 +43,7 @@ import pandas as pd
 # Берём готовые функции из forecast.py, чтобы проверять ровно ту же модель,
 # по которой строится план закупок. Копировать код сюда нельзя: тогда
 # можно случайно проверять одно, а использовать другое.
-from forecast import load_data, make_history, forecast_daily_demand
+from forecast import load_data, split_by_product, make_history, forecast_daily_demand
 
 # Доля последних дней, которые прячем от модели: 0.2 = 20%.
 # Попробуйте 0.3 — проверка станет длиннее, но обучающая часть короче.
@@ -48,6 +52,94 @@ TEST_SHARE = 0.2
 # Если тест короче этого, оценка ненадёжна: в нём слишком мало дней,
 # и одна случайная неделя сильно меняет результат.
 MIN_TEST_DAYS = 28
+
+
+def evaluate_cutoff(products, sales_by_sku, cutoff, test_days, forecast_fn=forecast_daily_demand):
+    """
+    ОДНА ПРОВЕРКА: прогноз в дату отреза против факта за следующие test_days дней.
+
+    forecast_fn — функция прогноза. Функцию в Python можно передать как
+    обычное значение. По умолчанию это модель из forecast.py, а check_rolling.py
+    подставляет сюда разные варианты, чтобы сравнить их между собой.
+
+    Возвращает две вещи:
+      table   — таблица по товарам: прогноз, факт, ошибка
+      skipped — список товаров, которые проверить не удалось, с причиной
+    """
+    test_end = cutoff + pd.Timedelta(days=test_days)
+    rows = []
+    skipped = []
+
+    for _, product in products.iterrows():
+        if product["sku"] not in sales_by_sku:
+            skipped.append(f"{product['name']}: нет строк о продажах")
+            continue
+        product_sales = sales_by_sku[product["sku"]]
+        dates = product_sales["date"]
+        train = product_sales[dates <= cutoff]                         # то, что модель знает
+        test = product_sales[(dates > cutoff) & (dates <= test_end)]   # то, что спрятали
+
+        daily, _, n_days = forecast_fn(make_history(train))
+        if n_days == 0:
+            skipped.append(f"{product['name']}: до {cutoff:%d.%m.%Y} продаж не было")
+            continue
+
+        # Сравниваем только дни, когда товар был в наличии. В дни дефицита
+        # продажи были бы больше, если бы товар был, — это не ошибка прогноза.
+        test_in_stock = test[test["stock"] > 0]
+        if len(test_in_stock) == 0:
+            skipped.append(f"{product['name']}: в тестовый период товара не было")
+            continue
+
+        forecast_total = daily * len(test_in_stock)   # прогноз на весь тест
+        actual_total = test_in_stock["sold"].sum()    # что продалось на самом деле
+
+        rows.append({
+            "Товар": product["name"],
+            "Прогноз, шт": round(forecast_total),
+            "Факт, шт": actual_total,
+            "Ошибка, шт": round(forecast_total - actual_total),
+            # Плюс — прогноз завысил (закупили бы лишнее), минус — занизил (риск дефицита).
+            "Ошибка, %": round((forecast_total - actual_total) / actual_total * 100)
+                         if actual_total > 0 else None,
+            # Ошибка по дням: прогноз (одно и то же число каждый день) против факта
+            # за каждый день отдельно. abs() убирает знак: −3 и +3 — обе ошибки на 3.
+            "Ошибки по дням, шт": (test_in_stock["sold"] - daily).abs().sum(),
+        })
+
+    return pd.DataFrame(rows), skipped
+
+
+def calc_metrics(table):
+    """
+    Три итоговые метрики по всем товарам сразу. Возвращает три числа в процентах.
+
+    1. WAPE за период — главная метрика для закупок. Складываем промахи по
+       каждому товару без знака (и «перелёты», и «недолёты») и делим на все
+       реальные продажи. Товары с большими продажами весят больше: ошибка
+       в 50% на товаре, который продаётся раз в неделю, почти не важна.
+
+    2. WAPE по дням — так точность обычно считают в машинном обучении.
+       Она всегда больше: в отдельный день продажи случайно скачут (то 8,
+       то 15), а за месяц эти скачки взаимно гасятся. Для закупок важнее
+       первая метрика: заказываем мы сразу на месяц, а не на один день.
+
+    3. Смещение (bias) — та же ошибка, но со знаком. Показывает, в какую
+       сторону прогноз ошибается в среднем. У хорошего прогноза оно около 0.
+
+    Если проверить не удалось ни одного товара, делить не на что —
+    возвращаем NaN («нет значения»).
+    """
+    if table.empty or table["Факт, шт"].sum() == 0:
+        return float("nan"), float("nan"), float("nan")
+
+    errors = table["Прогноз, шт"] - table["Факт, шт"]
+    total_actual = table["Факт, шт"].sum()
+
+    wape_period = errors.abs().sum() / total_actual * 100
+    wape_daily = table["Ошибки по дням, шт"].sum() / total_actual * 100
+    bias = errors.sum() / total_actual * 100
+    return wape_period, wape_daily, bias
 
 
 def main():
@@ -70,73 +162,23 @@ def main():
               f"Для надёжной проверки нужна история от 5 месяцев (см. README).")
     print()
 
-    rows = []
-    total_daily_error = 0   # сумма ошибок по отдельным дням (для второй метрики)
+    table, skipped = evaluate_cutoff(products, split_by_product(sales), cutoff, test_days)
 
-    for _, product in products.iterrows():
-        product_sales = sales[sales["sku"] == product["sku"]]
-        train = product_sales[product_sales["date"] <= cutoff]   # то, что модель знает
-        test = product_sales[product_sales["date"] > cutoff]     # то, что спрятали
+    for reason in skipped:
+        print(f"  Пропускаем — {reason}.")
+    if table.empty:
+        raise SystemExit("Не удалось проверить ни одного товара: до даты отреза нет продаж.")
+    # Колонка «Ошибки по дням» нужна только для метрики, на экран её не выводим.
+    print(table.drop(columns="Ошибки по дням, шт").to_string(index=False))
 
-        daily, _, n_days = forecast_daily_demand(make_history(train))
-        if n_days == 0:
-            print(f"  {product['name']}: до {cutoff:%d.%m.%Y} продаж не было, пропускаем.")
-            continue
-
-        # Сравниваем только дни, когда товар был в наличии. В дни дефицита
-        # продажи были бы больше, если бы товар был, — это не ошибка прогноза.
-        test_in_stock = test[test["stock"] > 0]
-        if len(test_in_stock) == 0:
-            print(f"  {product['name']}: в тестовый период товара не было, пропускаем.")
-            continue
-
-        forecast_total = daily * len(test_in_stock)   # прогноз на весь тест
-        actual_total = test_in_stock["sold"].sum()    # что продалось на самом деле
-
-        # Ошибка по дням: прогноз (одно и то же число каждый день) против факта
-        # за каждый день отдельно. abs() убирает знак: −3 и +3 — обе ошибки на 3.
-        total_daily_error += (test_in_stock["sold"] - daily).abs().sum()
-
-        rows.append({
-            "Товар": product["name"],
-            "Прогноз, шт": round(forecast_total),
-            "Факт, шт": actual_total,
-            "Ошибка, шт": round(forecast_total - actual_total),
-            # Плюс — прогноз завысил (закупили бы лишнее), минус — занизил (риск дефицита).
-            "Ошибка, %": round((forecast_total - actual_total) / actual_total * 100)
-                         if actual_total > 0 else None,
-        })
-
-    table = pd.DataFrame(rows)
-    print(table.to_string(index=False))
-
-    # --- Итоговые метрики по всем товарам ---
-    errors = table["Прогноз, шт"] - table["Факт, шт"]
-    total_actual = table["Факт, шт"].sum()
-
-    # 1. WAPE за период — главная метрика для закупок.
-    #    Складываем промахи по каждому товару без знака (и «перелёты», и «недолёты»)
-    #    и делим на все реальные продажи. Товары с большими продажами весят больше:
-    #    ошибка в 50% на товаре, который продаётся раз в неделю, почти не важна.
-    wape_period = errors.abs().sum() / total_actual * 100
-
-    # 2. WAPE по дням — так точность обычно считают в машинном обучении.
-    #    Она всегда больше: в отдельный день продажи случайно скачут (то 8, то 15),
-    #    а за месяц эти скачки взаимно гасятся. Для закупок важнее первая метрика:
-    #    заказываем мы сразу на месяц, а не на один день.
-    wape_daily = total_daily_error / total_actual * 100
-
-    # 3. Смещение (bias) — та же ошибка, но со знаком. Показывает, в какую сторону
-    #    прогноз ошибается в среднем. У хорошего прогноза оно близко к 0.
-    bias = errors.sum() / total_actual * 100
-
+    wape_period, wape_daily, bias = calc_metrics(table)
     print()
     print(f"Ошибка за период (WAPE): {wape_period:5.1f}%  ← главное для закупок, чем меньше, тем лучше")
     print(f"Ошибка по дням (WAPE):   {wape_daily:5.1f}%  ← всегда больше: дневные продажи сами по себе «скачут»")
     print(f"Смещение:                {bias:+5.1f}%  ← плюс: завышает, минус: занижает, лучше всего около 0")
     print()
     print("Смотрите на товары с самой большой ошибкой: у них обычно рост, падение или сезонность.")
-    print("Попробуйте улучшить forecast_daily_demand() в forecast.py и запустите проверку снова.")
+    print("Чтобы сравнить варианты прогноза между собой, запустите check_rolling.py.")
 
 
 if __name__ == "__main__":
