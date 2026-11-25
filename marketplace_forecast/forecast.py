@@ -4,7 +4,9 @@
 ==========================================================================
 
 Что делает скрипт:
-  1. Читает данные магазина:
+  1. Читает данные магазина. Есть два варианта:
+       data/data.xlsx — заполненный шаблон шаблон_данных.xlsx (листы «Товары» и «Продажи»)
+       или два CSV-файла:
        data/products.csv — справочник товаров: цена, себестоимость, комиссия...
        data/sales.csv    — продажи и остатки за каждый день
   2. Для каждого товара прогнозирует, сколько штук в день будет продаваться.
@@ -36,6 +38,35 @@ from openpyxl.styles import Font, PatternFill   # жирный шрифт и з�
 HERE = Path(__file__).parent
 DATA_DIR = HERE / "data"
 RESULT_FILE = HERE / "results" / "zakupki.xlsx"
+
+# Заполненный шаблон. Если этого файла нет, данные читаются из двух CSV
+# (data/products.csv и data/sales.csv) — так устроены демо-данные.
+EXCEL_FILE = DATA_DIR / "data.xlsx"
+
+# В шаблоне колонки называются по-русски, чтобы продавцу было понятно,
+# а код работает с короткими английскими названиями. Этот словарь
+# «переводит» одни в другие. Слева — как в шаблоне, справа — как в коде.
+COLUMN_NAMES = {
+    # лист «Товары»
+    "Артикул": "sku",
+    "Название": "name",
+    "Цена продажи": "price",
+    "Себестоимость": "cost",
+    "Комиссия МП, %": "commission_pct",
+    "Логистика за 1 шт": "logistics",
+    "Срок поставки, дней": "lead_time_days",
+    "В пути, шт": "in_transit",
+    # лист «Продажи»
+    "Дата": "date",
+    "Продано, шт": "sold",
+    "Остаток на конец дня, шт": "stock",
+    "Реклама за день": "ad_spend",
+}
+
+# Без этих колонок расчёт невозможен.
+PRODUCT_COLUMNS = ["sku", "name", "price", "cost", "commission_pct",
+                   "logistics", "lead_time_days", "in_transit"]
+SALES_COLUMNS = ["date", "sku", "sold", "stock", "ad_spend"]
 
 # По скольким последним дням (когда товар БЫЛ в наличии) считаем прогноз.
 #   14 — прогноз быстрее замечает рост и падение, но сильнее «скачет».
@@ -96,14 +127,36 @@ COLORS = {URGENT: "FFC7CE", ORDER: "FFEB9C", OK: "C6EFCE", OVERSTOCK: "DDEBF7",
 # ==========================================================================
 
 def load_data():
-    """Читает два CSV-файла и возвращает две таблицы (DataFrame)."""
-    # encoding="utf-8-sig" — кодировка, которую понимают и Python, и Excel.
-    # Без неё русские буквы из файла, сохранённого в Excel, превратятся в «кракозябры».
-    products = pd.read_csv(DATA_DIR / "products.csv", encoding="utf-8-sig")
+    """Читает справочник товаров и продажи. Возвращает две таблицы (DataFrame)."""
+    # Артикул читаем как текст (dtype=str). Иначе «00123» превратится
+    # в число 123, и артикулы в двух таблицах могут перестать совпадать.
+    if EXCEL_FILE.exists():
+        print(f"Читаю {EXCEL_FILE.name}...")
+        products = pd.read_excel(EXCEL_FILE, sheet_name="Товары", dtype={"Артикул": str})
+        sales = pd.read_excel(EXCEL_FILE, sheet_name="Продажи", dtype={"Артикул": str})
+    else:
+        print("Читаю products.csv и sales.csv...")
+        # encoding="utf-8-sig" — кодировка, которую понимают и Python, и Excel.
+        # Без неё русские буквы из файла, сохранённого в Excel, превратятся в «кракозябры».
+        products = pd.read_csv(DATA_DIR / "products.csv", encoding="utf-8-sig", dtype={"sku": str})
+        sales = pd.read_csv(DATA_DIR / "sales.csv", encoding="utf-8-sig", dtype={"sku": str})
 
-    # parse_dates превращает текст «2026-11-23» в настоящую дату,
-    # чтобы с ней можно было считать: прибавлять дни, сравнивать.
-    sales = pd.read_csv(DATA_DIR / "sales.csv", encoding="utf-8-sig", parse_dates=["date"])
+    # Русские названия колонок → английские. Если колонки уже английские,
+    # rename ничего не меняет, поэтому одна и та же строка работает для обоих вариантов.
+    products = products.rename(columns=COLUMN_NAMES)
+    sales = sales.rename(columns=COLUMN_NAMES)
+    check_columns(products, PRODUCT_COLUMNS, "Товары")
+    check_columns(sales, SALES_COLUMNS, "Продажи")
+
+    # В Excel часто остаются пустые строки внизу таблицы — выбрасываем их.
+    products = products.dropna(subset=["sku"])
+    sales = sales.dropna(subset=["sku", "date"])
+
+    # Пустые ячейки «В пути» и «Реклама» означают «ничего» — ставим 0.
+    products["in_transit"] = products["in_transit"].fillna(0)
+    sales["ad_spend"] = sales["ad_spend"].fillna(0)
+
+    sales["date"] = parse_dates(sales["date"])
 
     # Сортируем по товару и дате. Дальше мы берём «последние N дней»,
     # а это работает, только если строки идут по порядку.
@@ -113,12 +166,48 @@ def load_data():
     return products, sales
 
 
+def parse_dates(column):
+    """
+    Превращает колонку с датами в настоящие даты, чтобы с ними можно было
+    считать: прибавлять дни, сравнивать.
+
+    Даты бывают в двух видах: «2026-11-23» (так пишут программы и выгрузки)
+    и «23.11.2026» (так пишут люди). Сначала пробуем первый вид, а то, что
+    не разобралось, — вторым. Формат указываем явно: если доверить pandas
+    угадывать, «2026-08-05» может превратиться в 8 мая вместо 5 августа.
+    """
+    # errors="coerce": неразобранная дата превращается в пустое значение (NaT),
+    # а не обрывает программу.
+    iso = pd.to_datetime(column, format="ISO8601", errors="coerce")
+    russian = pd.to_datetime(column, format="%d.%m.%Y", errors="coerce")
+    dates = iso.fillna(russian)   # где первый вид не подошёл, берём второй
+
+    if dates.isna().any():
+        bad = column[dates.isna()].astype(str).unique()[:5]
+        raise SystemExit(f"ОШИБКА: не удалось прочитать даты: {', '.join(bad)}. "
+                         f"Пишите даты в виде 23.11.2026.")
+    return dates
+
+
+def check_columns(table, required, sheet_name):
+    """Останавливает программу с понятным сообщением, если не хватает колонок."""
+    # Обратный словарь: английское название → русское, чтобы в сообщении
+    # было видно, как колонка называется в шаблоне.
+    russian = {english: rus for rus, english in COLUMN_NAMES.items()}
+    missing = [f"«{russian[column]}»" for column in required if column not in table.columns]
+    if missing:
+        # SystemExit завершает программу и печатает текст — без длинной
+        # и пугающей «простыни» ошибки Python.
+        raise SystemExit(f"ОШИБКА: в таблице «{sheet_name}» нет колонок: {', '.join(missing)}. "
+                         f"Сверьтесь с шаблоном шаблон_данных.xlsx.")
+
+
 def check_data(products, sales):
     """
     Ищет типичные ошибки в данных и предупреждает о них.
 
     Артикулы, которых нет в справочнике, не попадут в отчёт. Обычно это
-    опечатка или новый товар, который забыли добавить в products.csv.
+    опечатка или новый товар, который забыли добавить в справочник.
 
     Самая коварная ошибка — в выгрузке нет дней, когда продаж было 0.
     Многие отчёты маркетплейсов показывают только дни с продажами.
@@ -129,7 +218,7 @@ def check_data(products, sales):
     # артикулы, которые есть в продажах, но которых нет в справочнике.
     unknown = set(sales["sku"]) - set(products["sku"])
     if unknown:
-        print(f"  ВНИМАНИЕ: этих артикулов нет в products.csv, они не попадут в отчёт: "
+        print(f"  ВНИМАНИЕ: этих артикулов нет в справочнике товаров, они не попадут в отчёт: "
               f"{', '.join(sorted(unknown))}")
 
     for sku, rows in sales.groupby("sku"):
@@ -234,7 +323,7 @@ def plan_purchase(product, product_sales, today):
     # Примечания — подсказки человеку, на что обратить внимание.
     notes = []
     if len(product_sales) == 0:
-        notes.append("Нет строк в sales.csv: проверьте, совпадает ли артикул")
+        notes.append("Нет строк о продажах: проверьте, совпадает ли артикул")
     else:
         if stock == 0:
             notes.append("Товара нет на складе прямо сейчас")
@@ -484,7 +573,6 @@ def print_summary(purchase, profit, today):
 # ==========================================================================
 
 def main():
-    print("Читаю данные...")
     products, sales = load_data()
 
     # «Сегодня» = день после последней даты в данных, а не дата на компьютере.
