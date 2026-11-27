@@ -208,6 +208,15 @@ async def test_reminders_fire_once_per_stage(service):
     assert [r.stage for r in await service.due_reminders()] == ["3d"]
 
 
+async def test_short_trial_skips_premature_reminder(service):
+    await service.register(10, "alice", "Alice")
+    await service.activate_trial(10)  # 3 дня
+    assert await service.due_reminders() == []  # без «закончится через 3 дня» сразу после старта
+
+    await _expire(service, 10, utcnow() + timedelta(hours=5))
+    assert [r.stage for r in await service.due_reminders()] == ["1d"]
+
+
 async def test_stats(service, provider, settings):
     await service.register(10, "alice", "Alice")
     await service.register(11, "bob", "Bob")

@@ -162,6 +162,13 @@ class VpnService:
                 user.panel_id = panel_user.id
                 user.subscription_url = panel_user.subscription_url
                 user.expires_at = panel_user.expire_at
+                # Короткий срок (пробный период, подарок на пару дней) не должен сразу
+                # вызывать «закончится через 3 дня»: такие напоминания считаем отправленными.
+                left = panel_user.expire_at - now
+                if left <= timedelta(days=3):
+                    user.remind_3d_for = panel_user.expire_at
+                if left <= timedelta(days=1):
+                    user.remind_1d_for = panel_user.expire_at
                 await s.commit()
                 return user
 
