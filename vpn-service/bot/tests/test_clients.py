@@ -16,8 +16,7 @@ from app.payments import CryptoBotProvider, InvoiceState, PaymentError, YooKassa
 from app.remnawave import RemnawaveClient, RemnawaveError
 
 USER = {
-    "uuid": "6f1c1f9e-0000-4000-8000-000000000001",
-    "id": 1,
+    "id": 7,
     "shortUuid": "abc",
     "username": "tg_10",
     "status": "ACTIVE",
@@ -61,7 +60,7 @@ async def test_remnawave_create_user_body_and_headers():
         "hwidDeviceLimit": 3,
         "tag": "BOT",
     }
-    assert user.uuid == USER["uuid"] and user.used_traffic_bytes == 1024
+    assert user.id == 7 and user.used_traffic_bytes == 1024
     assert user.expire_at == datetime(2026, 12, 27, 10, tzinfo=timezone.utc)
     await client.close()
 
@@ -85,20 +84,20 @@ async def test_remnawave_update_and_404():
         return_value=httpx.Response(404, json={"message": "User not found"})
     )
     upd = respx.patch("https://p.example.com/api/users").mock(return_value=httpx.Response(200, json={"response": USER}))
-    respx.get("https://p.example.com/api/users/bad").mock(return_value=httpx.Response(500, text="oops"))
+    respx.get("https://p.example.com/api/users/99").mock(return_value=httpx.Response(500, text="oops"))
 
     client = RemnawaveClient("https://p.example.com", "tok")
     assert await client.get_user_by_username("nobody") is None
-    await client.update_user(USER["uuid"], expire_at=datetime(2027, 1, 1, tzinfo=timezone.utc), status="ACTIVE")
+    await client.update_user(7, expire_at=datetime(2027, 1, 1, tzinfo=timezone.utc), status="ACTIVE")
     assert json.loads(upd.calls.last.request.content) == {
-        "uuid": USER["uuid"],
+        "id": 7,
         "expireAt": "2027-01-01T00:00:00.000Z",
         "status": "ACTIVE",
     }
     with pytest.raises(RemnawaveError):
-        await client.get_user_by_uuid("bad")
+        await client.get_user_by_id(99)
     with pytest.raises(TypeError):
-        await client.update_user("x", bogus=1)
+        await client.update_user(1, bogus=1)
     await client.close()
 
 

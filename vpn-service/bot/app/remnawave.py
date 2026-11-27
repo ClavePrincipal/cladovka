@@ -1,7 +1,8 @@
-"""Минимальный клиент REST API панели Remnawave (сверено с контрактом SDK remnawave 2.8.x).
+"""Минимальный клиент REST API панели Remnawave v3 (сверено с @remnawave/backend-contract 3.4.x).
 
 Используем только то, что нужно боту: создать/обновить/получить пользователя и список сквадов.
 Все ответы панели приходят в обёртке {"response": ...}.
+В v3 пользователь адресуется числовым id (поля uuid больше нет).
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ class RemnawaveError(Exception):
 
 @dataclass
 class PanelUser:
-    uuid: str
+    id: int
     username: str
     status: str
     expire_at: datetime
@@ -37,7 +38,7 @@ class PanelUser:
     def from_api(cls, data: dict[str, Any]) -> "PanelUser":
         traffic = data.get("userTraffic") or {}
         return cls(
-            uuid=data["uuid"],
+            id=int(data["id"]),
             username=data["username"],
             status=data.get("status", "ACTIVE"),
             expire_at=_parse_dt(data["expireAt"]),
@@ -102,9 +103,9 @@ class RemnawaveClient:
             raise
         return PanelUser.from_api(data)
 
-    async def get_user_by_uuid(self, uuid: str) -> PanelUser | None:
+    async def get_user_by_id(self, user_id: int) -> PanelUser | None:
         try:
-            data = await self._request("GET", f"/users/{uuid}")
+            data = await self._request("GET", f"/users/{user_id}")
         except RemnawaveError as e:
             if e.status == 404:
                 return None
@@ -142,8 +143,9 @@ class RemnawaveClient:
             body["tag"] = tag
         return PanelUser.from_api(await self._request("POST", "/users", json=body))
 
-    async def update_user(self, uuid: str, **fields: Any) -> PanelUser:
-        body: dict[str, Any] = {"uuid": uuid}
+    async def update_user(self, user_id: int, **fields: Any) -> PanelUser:
+        """PATCH /api/users. В v3 status принимает только ACTIVE или DISABLED, expireAt — только будущую дату."""
+        body: dict[str, Any] = {"id": user_id}
         mapping = {
             "expire_at": "expireAt",
             "status": "status",
@@ -159,9 +161,9 @@ class RemnawaveClient:
             body[mapping[key]] = _iso(value) if isinstance(value, datetime) else value
         return PanelUser.from_api(await self._request("PATCH", "/users", json=body))
 
-    async def revoke_subscription(self, uuid: str) -> PanelUser:
+    async def revoke_subscription(self, user_id: int) -> PanelUser:
         """Перевыпустить ссылку подписки (если пользователь её «слил»)."""
-        return PanelUser.from_api(await self._request("POST", f"/users/{uuid}/actions/revoke", json={}))
+        return PanelUser.from_api(await self._request("POST", f"/users/{user_id}/actions/revoke", json={}))
 
     # --- squads ---
 

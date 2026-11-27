@@ -107,8 +107,8 @@ class VpnService:
         return self._squads
 
     async def _find_panel_user(self, user: User) -> PanelUser | None:
-        if user.panel_uuid:
-            found = await self.panel.get_user_by_uuid(user.panel_uuid)
+        if user.panel_id:
+            found = await self.panel.get_user_by_id(user.panel_id)
             if found:
                 return found
         return await self.panel.get_user_by_username(self.panel_username(user.id))
@@ -121,7 +121,7 @@ class VpnService:
                 return None
             panel_user = await self._find_panel_user(user)
             if panel_user:
-                user.panel_uuid = panel_user.uuid
+                user.panel_id = panel_user.id
                 user.subscription_url = panel_user.subscription_url
                 user.expires_at = panel_user.expire_at
                 await s.commit()
@@ -158,15 +158,15 @@ class VpnService:
                     # DISABLED не трогаем: это ручная блокировка админом
                     if panel_user.status == "EXPIRED":
                         fields["status"] = "ACTIVE"
-                    panel_user = await self.panel.update_user(panel_user.uuid, **fields)
-                user.panel_uuid = panel_user.uuid
+                    panel_user = await self.panel.update_user(panel_user.id, **fields)
+                user.panel_id = panel_user.id
                 user.subscription_url = panel_user.subscription_url
                 user.expires_at = panel_user.expire_at
                 await s.commit()
                 return user
 
     def trial_available(self, user: User) -> bool:
-        return self.settings.trial_days > 0 and not user.trial_used and user.panel_uuid is None
+        return self.settings.trial_days > 0 and not user.trial_used and user.panel_id is None
 
     async def activate_trial(self, user_id: int) -> User:
         async with self.db.session() as s:

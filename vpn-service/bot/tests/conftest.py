@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import itertools
 import os
 import sys
-import uuid as uuidlib
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 import pytest
@@ -22,17 +22,18 @@ class FakePanel:
     """In-memory имитация панели Remnawave."""
 
     def __init__(self) -> None:
-        self.users: dict[str, PanelUser] = {}
+        self.users: dict[int, PanelUser] = {}
         self.fail_next = False
         self.calls: list[str] = []
+        self._ids = itertools.count(1)
 
     def _check_fail(self) -> None:
         if self.fail_next:
             self.fail_next = False
             raise RemnawaveError(500, "boom")
 
-    async def get_user_by_uuid(self, uuid: str) -> PanelUser | None:
-        return self.users.get(uuid)
+    async def get_user_by_id(self, user_id: int) -> PanelUser | None:
+        return self.users.get(user_id)
 
     async def get_user_by_username(self, username: str) -> PanelUser | None:
         return next((u for u in self.users.values() if u.username == username), None)
@@ -40,13 +41,13 @@ class FakePanel:
     async def create_user(self, *, username: str, expire_at: datetime, telegram_id=None, **kw) -> PanelUser:
         self._check_fail()
         self.calls.append(f"create:{username}")
-        uid = str(uuidlib.uuid4())
+        uid = next(self._ids)
         u = PanelUser(
-            uuid=uid,
+            id=uid,
             username=username,
             status="ACTIVE",
             expire_at=expire_at,
-            subscription_url=f"https://sub.example.com/{uid[:8]}",
+            subscription_url=f"https://sub.example.com/sub{uid}",
             used_traffic_bytes=0,
             traffic_limit_bytes=0,
             telegram_id=telegram_id,
@@ -54,12 +55,16 @@ class FakePanel:
         self.users[uid] = u
         return u
 
-    async def update_user(self, uuid: str, **fields) -> PanelUser:
+    async def update_user(self, uid: int, **fields) -> PanelUser:
         self._check_fail()
-        self.calls.append(f"update:{uuid}")
-        u = self.users[uuid]
+        self.calls.append(f"update:{uid}")
+        # Правила валидации панели v3 (PATCH /api/users)
+        assert fields.get("status", "ACTIVE") in ("ACTIVE", "DISABLED"), fields
+        if "expire_at" in fields:
+            assert fields["expire_at"] > datetime.now(timezone.utc), "expireAt в прошлом"
+        u = self.users[uid]
         u = replace(u, expire_at=fields.get("expire_at", u.expire_at), status=fields.get("status", u.status))
-        self.users[uuid] = u
+        self.users[uid] = u
         return u
 
     async def get_internal_squad_uuids(self) -> list[str]:

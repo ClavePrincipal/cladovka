@@ -15,8 +15,8 @@ from app.service import ServiceError
 async def _expire(service, user_id: int, at) -> None:
     """Сдвинуть срок подписки (и в БД, и в фейковой панели)."""
     user = await service.get_user(user_id)
-    panel_user = service.panel.users[user.panel_uuid]
-    service.panel.users[user.panel_uuid] = type(panel_user)(**{**panel_user.__dict__, "expire_at": at})
+    panel_user = service.panel.users[user.panel_id]
+    service.panel.users[user.panel_id] = type(panel_user)(**{**panel_user.__dict__, "expire_at": at})
     async with service.db.session() as s:
         await s.execute(update(User).where(User.id == user_id).values(expires_at=at))
         await s.commit()
@@ -39,7 +39,7 @@ async def test_extend_creates_then_adds_to_remaining_time(service, panel):
     before = utcnow()
     user = await service.extend(10, 30)
     assert panel.calls == ["create:tg_10"]
-    assert user.subscription_url and user.panel_uuid
+    assert user.subscription_url and user.panel_id
     assert timedelta(days=30) - timedelta(seconds=5) < user.expires_at - before < timedelta(days=30, seconds=5)
 
     first_expiry = user.expires_at
@@ -53,11 +53,11 @@ async def test_extend_after_expiry_counts_from_now(service, panel):
     await service.extend(10, 30)
     await _expire(service, 10, utcnow() - timedelta(days=10))
     panel_user = next(iter(panel.users.values()))
-    panel.users[panel_user.uuid] = type(panel_user)(**{**panel_user.__dict__, "status": "EXPIRED"})
+    panel.users[panel_user.id] = type(panel_user)(**{**panel_user.__dict__, "status": "EXPIRED"})
 
     user = await service.extend(10, 30)
     assert user.expires_at > utcnow() + timedelta(days=29)
-    assert panel.users[user.panel_uuid].status == "ACTIVE"
+    assert panel.users[user.panel_id].status == "ACTIVE"
 
 
 async def test_extend_recovers_panel_user_by_username(service, panel, db):
@@ -65,7 +65,7 @@ async def test_extend_recovers_panel_user_by_username(service, panel, db):
     await service.register(10, "alice", "Alice")
     await service.extend(10, 30)
     async with db.session() as s:
-        await s.execute(update(User).where(User.id == 10).values(panel_uuid=None))
+        await s.execute(update(User).where(User.id == 10).values(panel_id=None))
         await s.commit()
     await service.extend(10, 30)
     assert len(panel.users) == 1

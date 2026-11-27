@@ -178,7 +178,7 @@ def admin_user(user: User, s: Settings) -> str:
         f"👤 <b>{name}</b> (<code>{user.id}</code>)\n"
         f"Зарегистрирован: {fmt_date(user.created_at, s.timezone)}\n"
         f"{status_line(user, s)}\n"
-        f"Panel UUID: <code>{user.panel_uuid or '—'}</code>\n"
+        f"ID в панели: <code>{user.panel_id or '—'}</code>\n"
         f"Пригласил: {user.referrer_id or '—'} | Триал: {'да' if user.trial_used else 'нет'}"
         f"{' | ⛔️ заблокировал бота' if user.bot_blocked else ''}"
     )

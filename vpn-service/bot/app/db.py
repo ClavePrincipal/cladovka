@@ -54,7 +54,7 @@ class User(Base):
     bot_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Кэш данных из панели Remnawave
-    panel_uuid: Mapped[str | None] = mapped_column(String(36))
+    panel_id: Mapped[int | None] = mapped_column(BigInteger)
     subscription_url: Mapped[str | None] = mapped_column(String(512))
     expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime, index=True)
 
