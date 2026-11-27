@@ -1,0 +1,21 @@
+services:
+  bot:
+    build: .
+    container_name: vpn-bot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - bot-data:/app/data   # здесь лежит SQLite-база (data/bot.db)
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+    # Если бот стоит на том же сервере, что и панель, можно ходить в неё напрямую
+    # по docker-сети (тогда REMNAWAVE_URL=http://remnawave:3000):
+    # networks: [remnawave-network]
+
+volumes:
+  bot-data:
+
+# networks:
+#   remnawave-network:
+#     external: true
